@@ -1072,6 +1072,10 @@ AFFECTED_VERSION: Dict[str, Callable[[int, int, int], bool]] = {
         or (M == 5 and m == 6 and p <= 29)
     ),
     "CVE-2021-28254": lambda M, m, p: (M, m, p) <= (8, 5, 9),
+    # CVE-2021-43617: laravel/framework upload MIME/.phar allowlist gap, affected <= 8.70.2.
+    # Consumed by cve_2021_43617.scan as a FAIL-OPEN gate: a patched real host that leaks its
+    # framework version (composer.lock / HTML / _debugbar) is no longer reported vulnerable.
+    "CVE-2021-43617": lambda M, m, p: (M, m, p) <= (8, 70, 2),
 }
 
 
