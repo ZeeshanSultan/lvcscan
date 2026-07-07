@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""
+PHP Object Injection (POI) Scanner for Laravel Applications
+
+This module detects possible PHP object injection or insecure deserialization
+vulnerabilities in Laravel-based web applications by testing various endpoints
+with serialized PHP object payloads.
+"""
+
+import requests
+import json
+from typing import Dict, List, Optional, Union
+
+from modules.core import http_config
+from modules.core.http_config import app_url, normalize_base
+
+
+def _endpoint_exists(url: str, sess) -> bool:
+    """Cheap pre-flight: does this route exist at all?
+
+    One lightweight GET. A definitive 404 means the route is undefined in Laravel — there is no sink
+    there, so probing it with every payload x injection-method is wasted requests (the gap the user
+    hit: dozens of POSTs against endpoints that already 404'd). We gate on 404 SPECIFICALLY:
+      - 404            -> route absent  -> SKIP (return False)
+      - 405            -> route EXISTS but our probe method is wrong (e.g. POST-only sink) -> proceed
+      - anything else  -> exists / ambiguous (200/3xx/401/403/500/timeout) -> proceed
+    On any network error we proceed (fail-open) rather than risk skipping a real sink.
+    """
+    try:
+        resp = sess.get(url, timeout=3, allow_redirects=False)
+        return resp.status_code != 404
+    except Exception:
+        return True  # fail-open: don't skip on a transient error
+
+
+def scan(target_url: str, *, session=None, username=None, password=None, **kwargs) -> Optional[Dict[str, Union[str, int]]]:
+    """
+    Scan for PHP Object Injection vulnerabilities in Laravel applications.
+
+    Args:
+        target_url (str): The target URL to scan
+
+    Returns:
+        Optional[Dict]: Dictionary with vulnerability details if found, None otherwise
+        Format: {
+            "url": "https://example.com/api/cache",
+            "method": "post",
+            "payload": "a:1:{i:0;O:8:\"Exploit\":0:{}}",
+            "status_code": 500,
+            "response_snippet": "PHP Fatal error: unserialize()..."
+        }
+    """
+    if not target_url:
+        return None
+
+    sess = session or http_config.get_auth_session()
+
+    try:
+        # Normalize URL
+        if not target_url.startswith(('http://', 'https://')):
+            target_url = 'https://' + target_url
+        
+        target_url = normalize_base(target_url)
+        
+        # Likely endpoints that might process serialized data
+        test_endpoints = [
+            '/queue/failed',
+            '/api/user/session',
+            '/api/cache',
+            '/api/debug',
+            '/laravel/session/test',
+            '/api/data',
+            '/api/config',
+            '/session/store',
+            '/cache/store',
+            '/api/serialize'
+        ]
+        
+        # PHP object injection payloads
+        payloads = [
+            'a:1:{i:0;O:8:"Exploit":0:{}}',  # Basic serialized object
+            'O:8:"stdClass":0:{}',            # Standard class
+            'a:2:{i:0;s:4:"test";i:1;O:8:"Exploit":1:{s:4:"prop";s:5:"value";}}',  # Array with object
+            'O:10:"Illuminate":1:{s:4:"data";s:4:"test";}',  # Laravel-like class name
+            'a:1:{s:4:"data";O:4:"User":1:{s:2:"id";i:1;}}',  # User object simulation
+        ]
+        
+        # Test each endpoint with different injection methods
+        for endpoint in test_endpoints:
+            full_url = app_url(target_url, endpoint)
+
+            # 404-gate: skip the whole payload x method matrix for routes that don't exist.
+            if not _endpoint_exists(full_url, sess):
+                continue
+
+            for payload in payloads:
+                # Test POST parameter injection
+                result = _test_post_injection(full_url, payload, sess)
+                if result:
+                    return result
+
+                # Test cookie injection
+                result = _test_cookie_injection(full_url, payload, sess)
+                if result:
+                    return result
+
+                # Test JSON body injection
+                result = _test_json_injection(full_url, payload, sess)
+                if result:
+                    return result
+        
+    except Exception:
+        # Silently handle all exceptions
+        pass
+    
+    return None
+
+
+def _test_post_injection(url: str, payload: str, sess) -> Optional[Dict[str, Union[str, int]]]:
+    """
+    Test PHP object injection via POST parameters.
+
+    Args:
+        url: Target URL
+        payload: Serialized PHP object payload
+
+    Returns:
+        Optional[Dict]: Vulnerability details if found
+    """
+    try:
+        data = {
+            'data': payload,
+            'session_data': payload,
+            'cache_data': payload,
+            'serialize': payload
+        }
+
+        response = sess.post(
+            url,
+            data=data,
+            timeout=3,
+            allow_redirects=False
+        )
+        
+        if _is_vulnerable_response(response):
+            return {
+                "url": url,
+                "method": "post",
+                "payload": payload,
+                "status_code": response.status_code,
+                "response_snippet": response.text[:200]
+            }
+            
+    except Exception:
+        pass
+    
+    return None
+
+
+def _test_cookie_injection(url: str, payload: str, sess) -> Optional[Dict[str, Union[str, int]]]:
+    """
+    Test PHP object injection via cookies.
+
+    Args:
+        url: Target URL
+        payload: Serialized PHP object payload
+
+    Returns:
+        Optional[Dict]: Vulnerability details if found
+    """
+    try:
+        cookies = {
+            'laravel_session': payload,
+            'XSRF-TOKEN': payload,
+            'session_data': payload,
+            'cache_key': payload
+        }
+
+        response = sess.get(
+            url,
+            cookies=cookies,
+            timeout=3,
+            allow_redirects=False
+        )
+        
+        if _is_vulnerable_response(response):
+            return {
+                "url": url,
+                "method": "cookie",
+                "payload": payload,
+                "status_code": response.status_code,
+                "response_snippet": response.text[:200]
+            }
+            
+    except Exception:
+        pass
+    
+    return None
+
+
+def _test_json_injection(url: str, payload: str, sess) -> Optional[Dict[str, Union[str, int]]]:
+    """
+    Test PHP object injection via JSON body.
+
+    Args:
+        url: Target URL
+        payload: Serialized PHP object payload
+
+    Returns:
+        Optional[Dict]: Vulnerability details if found
+    """
+    try:
+        json_data = {
+            'data': payload,
+            'session': payload,
+            'cache': payload,
+            'serialized_data': payload
+        }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+
+        response = sess.post(
+            url,
+            json=json_data,
+            headers=headers,
+            timeout=3,
+            allow_redirects=False
+        )
+        
+        if _is_vulnerable_response(response):
+            return {
+                "url": url,
+                "method": "json",
+                "payload": payload,
+                "status_code": response.status_code,
+                "response_snippet": response.text[:200]
+            }
+            
+    except Exception:
+        pass
+    
+    return None
+
+
+def _is_vulnerable_response(response: requests.Response) -> bool:
+    """
+    Analyze response to determine if it indicates PHP object injection vulnerability.
+    
+    Args:
+        response: HTTP response object
+        
+    Returns:
+        bool: True if response indicates potential vulnerability
+    """
+    try:
+        # Check for error status codes
+        if response.status_code == 500:
+            content = response.text.lower()
+            
+            # PHP error keywords indicating deserialization issues
+            error_keywords = [
+                'unserialize()',
+                'object of class',
+                'php fatal error',
+                'uncaught exception',
+                'serialization of',
+                '__wakeup',
+                '__destruct',
+                'notice: unserialize',
+                'warning: unserialize',
+                'cannot access private property',
+                'call to undefined method',
+                'class not found'
+            ]
+            
+            # If any error keyword found, likely vulnerable
+            if any(keyword in content for keyword in error_keywords):
+                return True
+        
+        # Also check for 200 responses that might contain error information
+        elif response.status_code == 200:
+            content = response.text.lower()
+            
+            # Look for specific deserialization error patterns
+            deserialization_errors = [
+                'unserialize():',
+                'object of class',
+                'cannot access private property',
+                '__wakeup',
+                'serialization',
+                'php notice: unserialize',
+                'php warning: unserialize'
+            ]
+            
+            if any(error in content for error in deserialization_errors):
+                return True
+        
+    except Exception:
+        pass
+    
+    return False
+
+
+
+
+def _summarize_vulnerabilities(vulnerabilities: List[Dict]) -> Dict[str, Union[List[str], int]]:
+    """
+    Summarize found vulnerabilities by method and endpoint.
+    
+    Args:
+        vulnerabilities: List of vulnerability dictionaries
+        
+    Returns:
+        Dict: Summary of vulnerabilities
+    """
+    summary = {
+        "methods": [],
+        "endpoints": [],
+        "status_codes": []
+    }
+    
+    try:
+        for vuln in vulnerabilities:
+            method = vuln.get('method', '')
+            endpoint = vuln.get('url', '').split('/')[-1]
+            status_code = vuln.get('status_code', 0)
+            
+            if method and method not in summary["methods"]:
+                summary["methods"].append(method)
+            
+            if endpoint and endpoint not in summary["endpoints"]:
+                summary["endpoints"].append(endpoint)
+            
+            if status_code and status_code not in summary["status_codes"]:
+                summary["status_codes"].append(status_code)
+        
+    except Exception:
+        pass
+    
+    return summary
+
+
+def test_custom_payload(target_url: str, endpoint: str, payload: str, *, session=None, username=None, password=None, **kwargs) -> Optional[Dict[str, Union[str, int]]]:
+    """
+    Test a custom PHP object injection payload on a specific endpoint.
+
+    Args:
+        target_url (str): The target URL
+        endpoint (str): Specific endpoint to test
+        payload (str): Custom serialized PHP object payload
+
+    Returns:
+        Optional[Dict]: Vulnerability details if found
+    """
+    if not target_url or not endpoint or not payload:
+        return None
+
+    sess = session or http_config.get_auth_session()
+
+    try:
+        # Normalize URL
+        if not target_url.startswith(('http://', 'https://')):
+            target_url = 'https://' + target_url
+
+        target_url = normalize_base(target_url)
+        full_url = app_url(target_url, endpoint)
+
+        # Test all injection methods with custom payload
+        methods = [
+            ('post', lambda: _test_post_injection(full_url, payload, sess)),
+            ('cookie', lambda: _test_cookie_injection(full_url, payload, sess)),
+            ('json', lambda: _test_json_injection(full_url, payload, sess))
+        ]
+        
+        for method_name, test_func in methods:
+            result = test_func()
+            if result:
+                return result
+        
+    except Exception:
+        pass
+    
+    return None
+
+
