@@ -1,5 +1,25 @@
 # Laravel CVE Benchmark — Per-CVE Evidence Appendix
 
+> ## ✅ POST-REMEDIATION STATUS
+> Each block below is the **as-found** evidence at audit time (preserved). Verdicts that CHANGED after
+> remediation (all fixes verified live; suite 170/170):
+>
+> | CVE | As-found | Now | What changed |
+> |---|---|---|---|
+> | CVE-2025-54068 | 🟡 lab-assisted | **🟢 faithful** | real authed `/account/api` sink; synthetic `/demo` removed (`6dc8737`) |
+> | CVE-2021-43617 | 🔴 wrong version | **🟢 faithful** | rebuilt on Laravel 8.70.2 real `.phar`/`mimes` bypass (`c4945b5`) |
+> | CVE-2018-15133 | 🟡 seeded key | **🟡 key-faithful** | real random key leaked via `/.env`, recovered not injected (`665d7d6`); sink still lab-provided |
+> | CVE-2026-23524 | 🟡 fabricated gadget | **🟢 faithful** | real `laravel/reverb` 1.6.3 + real phpggc gadget → root RCE; 1.7.0 hardened (`40b27b3`) |
+> | CVE-2024-55661 | 🔴 hardcoded success | **🔴 (gated)** | nonce gate now blocks the fake `uid=`; module reports honestly, not "EXPLOITED" (`ef53feb`) |
+> | CVE-2017-14775 | 🔴 timing-as-RCE | 🔴 **relabeled** | class → `timing_info_disclosure`, severity Medium (`ef53feb`) |
+> | CVE-2025-27515 | 🟡 RCE-labeled | 🟡 **relabeled** | class → `file_validation_bypass` (advisory: not RCE) (`ef53feb`) |
+> | CVE-2023-43661 | 🟡 chained_rce | 🟡 **relabeled** | class → `ssti_config_disclosure` (`ef53feb`) |
+> | CVE-2016-10074 | 🔴 mislabeled | 🔴 **relabeled** | class → `swiftmailer_dependency_rce` (not Laravel) (`ef53feb`) |
+> | CVE-2022-2870/2886 | 🔴 synthetic | 🔴 **relabeled** | class → `disputed_app_deser_pattern` (`ef53feb`) |
+> | CVE-2020-24940/24941 | 🔴/🟡 | 🔴 **documented** | guarded bypass **empirically NOT reproducible** — honest note added (`69f5169`) |
+> | CVE-2020-19316 | 🔴 fabricated sink | 🔴 **documented** | Windows-only; not reproducible on Linux (`69f5169`) |
+> | CVE-2021-28254 | 🟡 custom sink | 🟡 **documented** | sink is inherent to the CVE; gadget genuine (`69f5169`) |
+
 Reference companion to `LAB_BENCHMARK_AUDIT.md`. One block per CVE with: public advisory, the real vulnerability, what the **lab** implements (`file:line`), what the **scanner** does (`file:line`), the **actual container-run verdict** (from `--json-out -`), rigging flags, and the realism verdict.
 
 Paths are relative to `lvcscan/`. Run verdicts use the vulnerable port; every hardened twin returned `success=False` (shown only where notable). Legend: 🟢 faithful · 🟡 lab-assisted · 🔴 faked/misattributed.

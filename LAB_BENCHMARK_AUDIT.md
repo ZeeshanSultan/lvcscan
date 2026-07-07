@@ -1,5 +1,32 @@
 # Laravel CVE Benchmark — Engineering Audit
 
+> ## ✅ REMEDIATION STATUS (post-audit update)
+> The body below is the **as-found** forensic record (what was rigged/broken at audit time). It is
+> preserved intact. The following was subsequently fixed and **verified live** (suite 170/170 throughout):
+>
+> **Systemic (commit `ef53feb`, `df5b29c`)**
+> - Proof-of-execution **nonce gate** — `success=True` now requires a per-run random marker in real
+>   command output; a lab echoing a constant `uid=` can no longer score (killed CVE-2024-55661's fake RCE).
+> - **Version gate** (fail-open) on CVE-2021-43617 — patched hosts that leak their version no longer false-positive.
+> - **6 honest relabels** (17-14775→timing, 23-43661→ssti/disclosure, 25-27515→validation-bypass,
+>   16-10074→swiftmailer, 22-2870/2886→disputed) so `--list` stops overclaiming.
+> - **Failing test fixed** + workbook/metadata drift synced (170/170).
+>
+> **Faithful lab rebuilds — verified with real root/authenticated RCE**
+> - **CVE-2025-54068** (`6dc8737`) → real authenticated Snipe-IT `PersonalAccessTokens` component (dropped synthetic `/demo`). 🟢
+> - **CVE-2021-43617** (`c4945b5`) → real Laravel 8.70.2 `.phar`/`mimes` framework bypass on Debian. 🟢
+> - **CVE-2018-15133** (`665d7d6`) → real random APP_KEY leaked via `/.env`, recovered (not injected). Key axis 🟢 (sink still lab-provided).
+> - **CVE-2026-23524** (`40b27b3`) → **real `laravel/reverb` 1.6.3** + Redis + real phpggc gadget → **root RCE**; real 1.7.0 hardened twin. 🟢
+>
+> **Remainders empirically resolved (`69f5169`)** — 24940/24941 guarded-bypass **verified NOT reproducible**
+> (framework guard holds), 19316 Windows-only (infeasible on Linux), 28254 sink inherent to the CVE. All now
+> honestly labeled rather than faithfully rebuildable.
+>
+> **Net:** Tier-A fabricated success eliminated; ~16 CVEs faithful; the rest honestly labeled. See
+> `LAB_BENCHMARK_REMEDIATION_FEASIBILITY.md` for the full done/not-done ledger.
+
+---
+
 **Subject:** Faked results and non-green defects in the CVE scanner + vuln-labs
 **Scope:** `lvcscan/` scanner (`check.py`, `modules/cves/*`), `vuln-labs/*`, `docs/Laravel_Vulnerabilities.xlsx`
 **Method:** (1) built + booted all 30 lab containers and ran `check.py` detect/exploit against each vulnerable port + hardened twin (`--json-out -`), (2) cross-checked every CVE against its public advisory (NVD / GitHub Security Advisory / vendor), (3) read each lab's `docker-compose.yml`, `entrypoint.sh`, `exploit.py`, and the scanner module to compare the *real* attack surface against what the lab manufactures.

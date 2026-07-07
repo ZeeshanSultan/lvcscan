@@ -1,5 +1,30 @@
 # Laravel CVE Benchmark — Remediation Feasibility
 
+> ## ✅ EXECUTION LEDGER (what was actually done)
+> The feasibility analysis below is preserved as written. Status of each item (all fixes verified live; 170/170):
+>
+> **DONE — systemic:** proof-of-execution nonce gate ✅ · version gate (43617) ✅ · 6 honest relabels ✅ ·
+> failing test + workbook drift ✅ · dedup/label of 2870≡2886 ✅.
+>
+> **DONE — faithful rebuilds (verified with real RCE):** CVE-2025-54068 (real authed sink) ✅ ·
+> CVE-2021-43617 (real 8.70.2 `.phar` bypass) ✅ · CVE-2018-15133 (real `.env` key leak+recover) ✅ key-axis ·
+> CVE-2026-23524 (real `laravel/reverb` 1.6.3 → root RCE + real 1.7.0 hardened) ✅.
+>
+> **DONE — honestly documented (empirically NOT faithfully rebuildable):** CVE-2020-24940/24941 — booted the
+> lab and confirmed the framework `$guarded` holds against JSON-path/nested/table-prefix keys, so the advisory's
+> guarded bypass does not reproduce ✅ · CVE-2020-19316 — Windows-only `mklink`, infeasible on this Linux host ✅ ·
+> CVE-2021-28254 — `/deserialize` sink is inherent to the CVE, gadget genuine ✅.
+>
+> **NOT DONE (marginal / hard, deliberately deferred):** CVE-2024-52301 detector no longer keying on the lab
+> marker (low realism gain) · CVE-2018-15133 reaching the real `EncryptCookies` cookie-decrypt path (blind-OOB rework).
+> `tools/lab_matrix_runner.py` still absent (the scratch driver built during validation is a starting point).
+>
+> **Not started (still-hand-rolled hardened twins):** the systemic "hardened twins must apply the real vendor fix"
+> item (§Part 1 #3) was addressed for the rebuilt labs (43617 blocklist, 26-23524 reverb 1.7.0, 54068 patched
+> Livewire) but not swept across every remaining lab.
+
+---
+
 Companion to `LAB_BENCHMARK_AUDIT.md` + `LAB_BENCHMARK_EVIDENCE_APPENDIX.md`.
 For every gap: can detection / exploitation / lab be made **realistic** (would work against a genuine vulnerable deployment), and what does it cost?
 
