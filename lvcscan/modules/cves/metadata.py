@@ -1039,7 +1039,250 @@ def _inject_lab_rebuild_preconditions(rows: list[dict[str, Any]]) -> None:
         row["preconditions"] = preconditions
 
 
-_inject_lab_rebuild_preconditions(_CVE_ROWS)
+# ---------------------------------------------------------------------------
+# Canonical exploit-preconditions (single source for the docs/laravel_cves.csv
+# "Exploit Pre-conditions" column). The verbose per-row prose above and the
+# _LAB_REBUILD_* data are retained as internal reference, but the CSV/report
+# field is generated from this compact, controlled-vocabulary schema so it is
+# uniform and interpretable. Six fixed fields per CVE:
+#
+#   Auth             exploit-time auth requirement (controlled phrase)
+#   APP_KEY          required | not required        (derived from structured metadata)
+#   Affected         package + version range
+#   Trigger          the target-side condition(s) that must hold to fire it
+#   Command-capable  yes | no                       (derived from structured metadata)
+#   Scenario         realism tag: realistic | config-dependent | app-sink-required
+#                    | lab-unauth/prod-auth | disputed | disputed (synthetic sink)
+#                    | partial
+#
+# APP_KEY and Command-capable are DERIVED from the structured fields (never hand
+# typed) and the Auth phrase is cross-checked against auth.exploit_required, so
+# this text can never silently contradict the scanner's real gating.
+_CANON: Dict[str, Dict[str, str]] = {
+    # ---- Critical (NVD) ----
+    "CVE-2016-10074": {
+        "auth": "none (unauthenticated)",
+        "affected": "SwiftMailer <= 5.4.4 (as used by a PHP/Laravel mail transport)",
+        "trigger": "a reachable mail-send endpoint passes attacker-controlled From/Sender/Return-Path into the SwiftMailer sendmail transport",
+        "scenario": "app-sink-required",
+    },
+    "CVE-2021-28254": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework <= 8.5.9 (provides the PendingBroadcast __destruct POP gadget)",
+        "trigger": "the application calls unserialize() on attacker-controlled input at a reachable route",
+        "scenario": "app-sink-required",
+    },
+    "CVE-2021-3129": {
+        "auth": "none (unauthenticated)",
+        "affected": "facade/ignition <= 2.5.1 (shipped by Laravel < 8.4.2)",
+        "trigger": "APP_ENV != production AND APP_DEBUG=true (registers POST /_ignition/execute-solution)",
+        "scenario": "config-dependent",
+    },
+    "CVE-2021-43617": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework <= 8.70.2",
+        "trigger": "upload endpoint uses the mimes:jpg,jpeg,png,gif rule and stores accepted files under their original name in a web-served, .phar-executing directory",
+        "scenario": "config-dependent",
+    },
+    "CVE-2024-21546": {
+        "auth": "none (unauthenticated) by CVE class; the S-Cart/Badaso app labs gate the upload behind auth",
+        "affected": "unisharp/laravel-filemanager < 2.9.1",
+        "trigger": "laravel-filemanager upload reachable and uploads stored under a PHP-executing web path (/storage or /data)",
+        "scenario": "config-dependent",
+    },
+    "CVE-2024-22836": {
+        "auth": "authenticated (admin / company-manager)",
+        "affected": "Akaunting <= 3.1.3",
+        "trigger": "poison company `locale` with shell metacharacters via POST /{company}/wizard/companies, then detonate via POST /{company}/apps/install",
+        "scenario": "realistic",
+    },
+    "CVE-2024-55556": {
+        "auth": "none (unauthenticated)",
+        "affected": "InvoiceShelf <= 1.3.0 (patched 2.0.0); Crater <= 6.0.6",
+        "trigger": "SESSION_DRIVER=cookie (encrypted session carries serialized PHP) and a valid APP_KEY is known/recovered; OOB HTTP callback used for command proof",
+        "scenario": "config-dependent",
+    },
+    "CVE-2025-14894": {
+        "auth": "none (unauthenticated)",
+        "affected": "livewire-filemanager/filemanager <= 1.0.4 (third-party package, not Laravel core)",
+        "trigger": "`php artisan storage:link` in place so uploads are web-served under /storage; filemanager upload reachable",
+        "scenario": "config-dependent",
+    },
+    "CVE-2025-49132": {
+        "auth": "none (unauthenticated)",
+        "affected": "Pterodactyl Panel <= 1.11.10",
+        "trigger": "reach /locales/locale.json traversal; command path additionally needs a reachable PEAR pearcmd.php and register_argc_argv=On",
+        "scenario": "config-dependent",
+    },
+    "CVE-2025-54068": {
+        "auth": "authenticated (staff) for the real Snipe-IT sink; unauthenticated by Livewire CVE class",
+        "affected": "Livewire v3, 3.0.0-beta.1 through 3.6.3 (fixed 3.6.4)",
+        "trigger": "reach a Livewire v3 component exposing an untyped/weakly-typed public property (hydration type juggling)",
+        "scenario": "realistic",
+    },
+    "CVE-2026-23524": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/reverb <= 1.6.3 (fixed 1.7.0)",
+        "trigger": "Redis horizontal scaling enabled (REVERB_SCALING_ENABLED=true) and attacker can publish a serialized message to the Redis scaling channel",
+        "scenario": "config-dependent",
+    },
+    # ---- High (NVD) ----
+    "CVE-2017-16894": {
+        "auth": "none (unauthenticated)",
+        "affected": "Laravel 5.5.x deploy/permissions misconfiguration (version-agnostic on the line)",
+        "trigger": "web server serves .env / backup env files (docroot is the project root, or dotfiles are served)",
+        "scenario": "config-dependent",
+    },
+    "CVE-2018-15133": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework <= 5.5.40 or 5.6.x <= 5.6.29",
+        "trigger": "a known/leaked APP_KEY and a reachable endpoint that decrypts X-XSRF-TOKEN/cookie (Encrypter::decrypt -> unserialize)",
+        "scenario": "config-dependent",
+    },
+    "CVE-2020-19316": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework < 5.8.17 (labs reproduce the command-injection class; detector is version-agnostic)",
+        "trigger": "a reachable route concatenates attacker input into a shell ln -s (Linux) / mklink (Windows) call without escaping",
+        "scenario": "app-sink-required",
+    },
+    "CVE-2020-5256": {
+        "auth": "authenticated (image-create permission)",
+        "affected": "BookStack <= 0.25.2",
+        "trigger": "reach the authenticated image-upload endpoint; uploads web-served and PHP-executable",
+        "scenario": "realistic",
+    },
+    "CVE-2022-25838": {
+        "auth": "none (unauthenticated); victim account has TOTP enabled",
+        "affected": "laravel/fortify < 1.11.1",
+        "trigger": "Fortify 2FA enabled on the target account; reach the two-factor challenge flow (TOTP capture-replay)",
+        "scenario": "realistic",
+    },
+    "CVE-2023-43661": {
+        "auth": "authenticated (dashboard user able to render incident templates)",
+        "affected": "Cachet <= 2.3.18",
+        "trigger": "render an incident template (Twig SSTI) to disclose APP_KEY, then forge an X-XSRF-TOKEN deserialization gadget at a CSRF-verified route",
+        "scenario": "realistic",
+    },
+    "CVE-2023-46865": {
+        "auth": "authenticated (superadmin, Sanctum)",
+        "affected": "Crater <= 6.0.6",
+        "trigger": "reach the authenticated logo/upload endpoint; /storage media path web-served and PHP-executable",
+        "scenario": "realistic",
+    },
+    "CVE-2024-47823": {
+        "auth": "authenticated (low-privilege) per advisory; the lab exposes an unauth /upload for reproduction",
+        "affected": "Livewire < 2.12.7 or v3 < 3.5.2",
+        "trigger": "app stores uploads under the original client filename (not Livewire's randomized name) and the upload component is reachable",
+        "scenario": "lab-unauth/prod-auth",
+    },
+    "CVE-2024-48987": {
+        "auth": "none (unauthenticated)",
+        "affected": "Snipe-IT < 7.0.10",
+        "trigger": "Passport cookie serialization + EncryptCookies serialize=true (XSRF-TOKEN plaintext -> unserialize) and a valid APP_KEY to forge the cookie",
+        "scenario": "config-dependent",
+    },
+    "CVE-2024-55555": {
+        "auth": "none (unauthenticated)",
+        "affected": "Invoice Ninja < 5.10.43 (validated exploitable 5.8.22-5.10.10)",
+        "trigger": "reach the route/hash endpoint that accepts encrypted Laravel payloads and a valid APP_KEY to forge the payload",
+        "scenario": "config-dependent",
+    },
+    "CVE-2024-55661": {
+        "auth": "authenticated",
+        "affected": "Laravel Pulse < 1.3.1",
+        "trigger": "reach the Pulse dashboard and influence the remembered query key / Livewire state into the decrypt/unserialize sink",
+        "scenario": "config-dependent",
+    },
+    # ---- Medium (NVD) ----
+    "CVE-2017-14775": {
+        "auth": "operator-supplied credentials or remember-me token material (no built-in default)",
+        "affected": "laravel/framework < 5.5.10",
+        "trigger": "app uses DB remember-me tokens and exposes a post-auth upload sink; reach /login + the upload path",
+        "scenario": "partial",
+    },
+    # ---- High (NVD) / Medium (independent) ----
+    "CVE-2020-24940": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework < 6.18.34 or 7.x < 7.23.2",
+        "trigger": "a mass-assignment route with an app-layer bare-name input filter on a sensitive column; a table-qualified key (users.is_admin) defeats the filter (table-name stripping)",
+        "scenario": "realistic",
+    },
+    "CVE-2020-24941": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework < 6.18.35 or 7.x < 7.24.0",
+        "trigger": "an Eloquent model uses $guarded (not $fillable) listing individual columns; reach a mass-assignment sink",
+        "scenario": "disputed",
+    },
+    "CVE-2024-52301": {
+        "auth": "none (unauthenticated)",
+        "affected": "laravel/framework < 6.20.45 / 7.30.7 / 8.83.28 / 9.52.17 / 10.48.23 / 11.31.0",
+        "trigger": "PHP register_argc_argv=On and attacker can influence the query string (overrides the resolved Laravel environment)",
+        "scenario": "config-dependent",
+    },
+    "CVE-2024-29291": {
+        "auth": "none (unauthenticated)",
+        "affected": "disputed record (Laravel 8-11); exposure is deploy-dependent, not version-specific",
+        "trigger": "storage/logs/laravel.log (or equivalent) is web-readable AND contains cleartext DB credentials",
+        "scenario": "disputed",
+    },
+    "CVE-2025-27515": {
+        "auth": "none (unauthenticated)",
+        "affected": "Laravel 10.0.0-10.48.28, 11.0.0-11.44.0, 12.0.0-12.1.0",
+        "trigger": "a wildcard files.* validation rule built from the fluent File rule object (File::types([...])); reach that endpoint",
+        "scenario": "config-dependent",
+    },
+    # ---- Low (independent) ----
+    "CVE-2022-2870": {
+        "auth": "none (unauthenticated)",
+        "affected": "Laravel 5.1.0-5.1.46 (incidental; no framework code path or patch)",
+        "trigger": "an app-provided unserialize() sink on attacker input (the lab adds a synthetic /deserialize route)",
+        "scenario": "disputed (synthetic sink)",
+    },
+    "CVE-2022-2886": {
+        "auth": "none (unauthenticated)",
+        "affected": "Laravel 5.1.0-5.1.46 (per NVD/VulDB; duplicate of CVE-2022-2870)",
+        "trigger": "an app-provided unserialize() sink on attacker input (the lab adds a synthetic /deserialize route)",
+        "scenario": "disputed (synthetic sink)",
+    },
+}
+
+_SCENARIO_VOCAB = {
+    "realistic", "config-dependent", "app-sink-required",
+    "lab-unauth/prod-auth", "disputed", "disputed (synthetic sink)", "partial",
+}
+
+
+def _canonical_preconditions(row: Dict[str, Any]) -> list[str]:
+    """Build the compact canonical precondition block for one CVE row.
+
+    APP_KEY and Command-capable are derived from the structured fields; the Auth
+    phrase is cross-checked against auth.exploit_required so the doc text can
+    never silently contradict the scanner's real gating.
+    """
+    cve = row["cve"]
+    c = _CANON[cve]
+    app_key_required = bool(row["app_key"].get("required_for_exploit"))
+    command_capable = bool(row["command_capable"])
+    exploit_auth = bool(row["auth"].get("exploit_required"))
+    if c["scenario"] not in _SCENARIO_VOCAB:
+        raise ValueError(f"{cve}: unknown Scenario tag {c['scenario']!r}")
+    if exploit_auth and c["auth"].startswith("none"):
+        raise ValueError(
+            f"{cve}: auth.exploit_required=True but canonical Auth says 'none' — fix the contradiction"
+        )
+    return [
+        f"Auth: {c['auth']}",
+        f"APP_KEY: {'required' if app_key_required else 'not required'}",
+        f"Affected: {c['affected']}",
+        f"Trigger: {c['trigger']}",
+        f"Command-capable: {'yes' if command_capable else 'no'}",
+        f"Scenario: {c['scenario']}",
+    ]
+
+
+for _row in _CVE_ROWS:
+    _row["preconditions"] = _canonical_preconditions(_row)
+
 CVE_METADATA: Dict[str, CveMetadata] = {row["cve"]: CveMetadata(**row) for row in _CVE_ROWS}
 CVE_META = {cve: meta.cve_meta_tuple for cve, meta in CVE_METADATA.items()}
 
