@@ -1,133 +1,117 @@
-# lvcscan — Laravel CVE Scanning & Exploitation Framework
+# lvcscan
 
-A detection-and-exploitation framework for **known, published CVEs in the Laravel ecosystem**
-(the framework itself, first-party packages, common third-party packages, and popular Laravel
-applications). It ships:
+Detection and exploitation of known CVEs across the Laravel ecosystem — the framework, first-party
+packages (Reverb, Pulse, Fortify, Livewire), common third-party packages, and popular Laravel apps.
+One scanner (`lvcscan/check.py`), one module per CVE, and a matching Docker lab (vulnerable + hardened
+twin) for every module.
 
-- a single-entry scanner (`lvcscan/check.py`) with per-CVE **detection** and **exploitation** modules,
-- a fleet of **dual-port Docker vuln-labs** (vulnerable + hardened twin) to validate every module end-to-end,
-- an honest, advisory-checked catalog (`docs/Laravel_Vulnerabilities.xlsx` + `modules/cves/metadata.py`).
+**Authorized use only.** Run this against systems you own or are contracted to test, or the bundled
+labs. It exercises public CVEs with public PoCs; using it outside an authorized scope may be illegal.
 
-> ## ⚠️ Authorized use only
-> This is offensive security tooling. Use it **only** against systems you own or are explicitly
-> authorized to test (your own infrastructure, the bundled labs, a sanctioned engagement). It targets
-> **already-public** CVEs with **already-public** PoCs. Do not point it at third-party systems without
-> written permission. You are responsible for staying within scope and applicable law.
+## Requirements
 
----
-
-## Why this exists
-
-Built to inventory and demonstrate the org's Laravel exposure: scan internal hosts for known CVEs and
-prove impact against **isolated, self-contained labs** before touching anything real. A core design goal
-is **honesty** — a "green" result must reflect a real vulnerability, not a rigged lab. Every module was
-cross-checked against its public advisory and validated against a real vulnerable build; see the audit
-reports in the repo root:
-
-- `LAB_BENCHMARK_AUDIT.md` — what each module really does vs. its advisory.
-- `LAB_BENCHMARK_EVIDENCE_APPENDIX.md` — per-CVE evidence (advisory ↔ lab ↔ actual run).
-- `LAB_BENCHMARK_REMEDIATION_FEASIBILITY.md` — realism remediation ledger.
-
-Integrity features baked into the scanner:
-- **Proof-of-execution gate** — an RCE `success` requires real command output carrying a per-run random
-  nonce (a lab echoing a constant string cannot score a false positive).
-- **Fail-open version gating** — a target that leaks a patched framework version is not reported vulnerable.
-- **Honest verdicts** — `version_applicable` / `precondition_detected` / `surface_present` /
-  `blocked_by_control` are distinguished from `confirmed_vulnerable`; OOB-only RCEs are reported as such.
-
----
-
-## Install
-
-```bash
-cd lvcscan
-python3 -m pip install -r requirements.txt   # requests, colorama, urllib3, cryptography
-# Docker (+ compose) is required only to run the vuln-labs.
-```
-
-Python 3.10+ recommended.
+- Python 3.10+ — `pip install -r lvcscan/requirements.txt` (`requests`, `colorama`, `urllib3`, `cryptography`)
+- Docker + Compose — only to run the vuln-labs
 
 ## Usage
 
 ```bash
 cd lvcscan
 
-# List every exploit-capable CVE, ranked by independent severity, with the flags each needs
-python3 check.py --list
-
-# Detect-only sweep of a target (no exploitation)
-python3 check.py https://target.example
-
-# Detect + exploit a single CVE
-python3 check.py https://target.example --cve CVE-2021-3129 --exploit --cmd 'id'
-
-# Authenticated CVEs: pass credentials
-python3 check.py https://target.example --cve CVE-2023-46865 --exploit --cmd 'id' -U admin@site -P '...'
-
-# APP_KEY-gated deserialization CVEs: the scanner recovers a leaked/default key, or pass one
-python3 check.py https://target.example --cve CVE-2024-55555 --exploit --cmd 'id' --app-key 'base64:...'
-
-# Machine-readable report + route everything through a proxy (e.g. Burp)
-python3 check.py https://target.example --json-out report.json --proxy http://127.0.0.1:8080
+python3 check.py --list                                  # all CVEs, ranked, with required flags
+python3 check.py https://target                          # detect-only sweep
+python3 check.py https://target --cve CVE-2021-3129 --exploit --cmd id
+python3 check.py https://target --cve CVE-2023-46865 --exploit --cmd id -U admin@site -P pass
+python3 check.py https://target --cve CVE-2024-55555 --exploit --cmd id --app-key base64:...
+python3 check.py https://target --json-out report.json --proxy http://127.0.0.1:8080
 ```
 
-Useful flags: `--exploit`, `--cve <ID>`, `--cmd/--command`, `-U/-P`, `--app-key`, `--opt KEY=VALUE`
-(module-specific preconditions, e.g. `--opt redis_host=… --opt oob_read_url=…`), `--json-out`,
-`--proxy`, `--in-house` (de-emphasize noisy public probes on hardened/internal deployments),
-`--list-detectors`, `--trace-http`.
+| Flag | Purpose |
+| --- | --- |
+| `--cve <ID>` | Target a single CVE (omit to sweep all) |
+| `--exploit` | Attempt exploitation (default is detect-only) |
+| `--cmd <cmd>` | Command to run for RCE modules |
+| `-U` / `-P` | Credentials for authenticated CVEs |
+| `--app-key <key>` | APP_KEY for deserialization CVEs (else recovered from a leak if present) |
+| `--opt K=V` | Module-specific preconditions (e.g. `--opt redis_host=… --opt oob_read_url=…`) |
+| `--json-out <path>` | Machine-readable report (`-` for stdout) |
+| `--proxy <url>` | Route all traffic through a proxy; `--in-house` for hardened/internal targets |
+| `--list-detectors` / `--trace-http` | List non-CVE detectors / log every request |
 
-## Repository layout
+Verdicts are explicit: `confirmed_vulnerable`, `version_applicable`, `precondition_detected`,
+`surface_present`, `blocked_by_control`, `not_detected`. An RCE only reports success on real command
+output; a leaked-but-patched version is not reported vulnerable.
+
+## Layout
 
 ```
 lvcscan/
-  check.py                 # single entry point (banner, ranking, pipeline, reporting)
-  requirements.txt
+  check.py                    entry point
   modules/
-    cves/                  # one detection+exploitation module per CVE + metadata.py (the catalog)
-    detection/             # non-CVE detectors (.env, git, debug tools, mass-assignment, …) + tests/
-    exploitation/          # shared exploitation helpers (OOB proof, …)
-    generators/php_gadgets # pure-python phpggc-equivalent POP chains (Laravel/Guzzle/Monolog/Symfony)
-    probes/                # APP_KEY recovery, path wordlists, response memo
-    registry/              # CVE + detector registries (single source of truth)
-    core/                  # HTTP config (proxy/TLS/headers/tracing)
-    helpers/               # pipeline + livewire upload helpers
-  vuln-labs/               # dual-port Docker labs (see vuln-labs/README.md)
-  wordlists/               # recon + webshell path lists
-  docs/Laravel_Vulnerabilities.xlsx   # the CVE catalog / sheet
+    cves/                     one detect+exploit module per CVE, + metadata.py (catalog)
+    detection/                non-CVE detectors (.env, git, debug tools, …) + tests/
+    exploitation/ helpers/    shared exploitation + pipeline helpers
+    generators/php_gadgets/   pure-python POP chains (Laravel/Guzzle/Monolog/Symfony)
+    probes/ registry/ core/   APP_KEY recovery, registries, HTTP config
+  vuln-labs/                  dual-port Docker labs (see vuln-labs/README.md)
+  wordlists/  docs/           recon lists; CVE catalog spreadsheet
 ```
 
-## Vulnerability labs
+## Labs
 
-Each lab is a self-contained Docker environment with a **vulnerable** profile and a **hardened twin**
-(same stack, real vendor fix), on paired ports (`hardened = vulnerable + 1000`). Full docs, taxonomy,
-port map, and per-lab truth labels: **`lvcscan/vuln-labs/README.md`**.
+Each lab ships a vulnerable profile and a hardened twin (same stack, real vendor fix) on paired ports
+(`hardened = vulnerable + 1000`), bound to localhost. `.env` is generated at start from `.env.example`;
+the APP_KEYs and seeded credentials in `run.sh`/entrypoints are public repo-default fixtures, not real
+secrets. Full taxonomy and per-lab notes: [`lvcscan/vuln-labs/README.md`](lvcscan/vuln-labs/README.md).
 
 ```bash
 cd lvcscan/vuln-labs/framework/laravel/8.4.x/cve-2021-3129_ignition-rce_39003-40003
-bash run.sh                 # build + start both profiles
+bash run.sh                                                   # build + start both profiles
 python3 ../../../../../check.py http://localhost:39003 --cve CVE-2021-3129 --exploit --cmd id
-python3 ../../../../../check.py http://localhost:40003 --cve CVE-2021-3129 --exploit --cmd id   # hardened → blocked
-bash mitigate.sh            # apply the vendor remediation in-place (revert to re-arm)
-bash run.sh down            # tear down
+python3 ../../../../../check.py http://localhost:40003 --cve CVE-2021-3129 --exploit --cmd id   # hardened: blocked
+bash mitigate.sh          # apply vendor fix in place (revert to re-arm)
+bash run.sh down          # tear down
 ```
 
-Labs bind to `127.0.0.1` only. `.env` files are generated at container start from `.env.example`
-(never committed — see `.gitignore`); the APP_KEYs / seeded credentials that appear in `run.sh` and
-lab entrypoints are the **public repo-default lab fixtures** the advisories themselves cite, not real
-secrets.
+## Coverage
 
-## CVE coverage (30)
+`--cmd` = command-capable RCE · `-U/-P` = needs auth · `--app-key` = needs a known/leaked APP_KEY.
 
-Detection + exploitation modules span Laravel framework, first-party packages (Reverb, Pulse, Fortify,
-Livewire), third-party packages (UniSharp / livewire filemanagers), and applications (Snipe-IT, Invoice
-Ninja, InvoiceShelf, Pterodactyl, Cachet, Akaunting, Crater, BookStack, Badaso). Highlights include the
-Ignition RCE (CVE-2021-3129), the default-`APP_KEY` deserialization RCEs (CVE-2024-48987 / 55555 / 55556),
-the Livewire/filemanager upload RCEs, the Pterodactyl locale traversal (CVE-2025-49132), and the Reverb
-Redis-scaling deserialization RCE (CVE-2026-23524). Run `python3 check.py --list` for the current,
-authoritative list with per-CVE severity, class, and required flags; per-CVE realism/status is in the
-audit reports above.
+| CVE | Sev | Target | Class | Needs |
+| --- | --- | --- | --- | --- |
+| CVE-2021-3129 | Critical | Laravel / Ignition (debug) | rce | `--cmd` |
+| CVE-2021-43617 | Critical | Laravel ≤8.70.2 upload | rce (`.phar`/mimes) | `--cmd` |
+| CVE-2021-28254 | Critical | Laravel PendingBroadcast | deserialize_rce | `--cmd` |
+| CVE-2024-21546 | Critical | UniSharp laravel-filemanager | rce (upload) | `--cmd` |
+| CVE-2024-22836 | Critical | Akaunting | rce (locale cmdi) | `--cmd -U/-P` |
+| CVE-2024-55556 | Critical | InvoiceShelf / Crater | deserialize_rce | `--cmd --app-key` |
+| CVE-2025-14894 | Critical | livewire-filemanager | rce (upload) | `--cmd` |
+| CVE-2025-49132 | Critical | Pterodactyl Panel | rce (locale traversal) | `--cmd` |
+| CVE-2025-54068 | Critical | Snipe-IT / Livewire v3 | deserialize_rce | `--cmd -U/-P` |
+| CVE-2026-23524 | Critical | Laravel Reverb (Redis scaling) | deserialize_rce | `--cmd` + `--opt redis/oob` |
+| CVE-2016-10074 | Critical | SwiftMailer (dependency) | rce (sendmail arg-inj) | `--cmd` |
+| CVE-2024-48987 | High | Snipe-IT | deserialize_rce | `--cmd --app-key` |
+| CVE-2024-55555 | High | Invoice Ninja | deserialize_rce | `--cmd --app-key` |
+| CVE-2018-15133 | High | Laravel cookie / X-XSRF | deserialize_rce | `--cmd --app-key` |
+| CVE-2023-43661 | High | Cachet (Twig SSTI chain) | ssti_chained_rce | `--cmd -U/-P` |
+| CVE-2023-46865 | High | Crater upload-logo | rce | `--cmd -U/-P` |
+| CVE-2020-5256 | High | BookStack image upload | rce | `--cmd -U/-P` |
+| CVE-2024-55661 | High | Laravel Pulse (Livewire) | rce (`remember()`) | `--cmd -U/-P` |
+| CVE-2024-47823 | High | Livewire temp-file upload | rce | `--cmd` |
+| CVE-2020-19316 | High | Laravel `Filesystem::link()` (Windows) | rce (cmdi) | `--cmd` |
+| CVE-2017-16894 | High | Laravel `.env` disclosure | info_disclosure | — |
+| CVE-2022-25838 | High | Fortify 2FA (TOTP reuse) | totp_replay | — |
+| CVE-2025-27515 | Medium | Laravel `files.*` validation | file_validation_bypass | `--cmd` |
+| CVE-2024-52301 | Medium | Laravel `register_argc_argv` | config_manipulation | — |
+| CVE-2020-24940 | Medium | Eloquent mass-assignment (table-strip) | mass_assignment | — |
+| CVE-2020-24941 | Medium | Eloquent mass-assignment (JSON nesting) | mass_assignment | — |
+| CVE-2024-29291 | Medium | `laravel.log` DB-cred disclosure (disputed) | info_disclosure | — |
+| CVE-2017-14775 | Medium | Remember-me timing side-channel | timing_info_disclosure | `--cmd -U/-P` |
+| CVE-2022-2870 | Low | Laravel 5.1 app-unserialize (disputed) | disputed_app_deser_pattern | `--cmd` |
+| CVE-2022-2886 | Low | Laravel 5.1 app-unserialize (disputed) | disputed_app_deser_pattern | `--cmd` |
 
-## License / disclaimer
+`python3 check.py --list` is the authoritative, live version of this table.
 
-No warranty. Provided for authorized security assessment, research, and education. The maintainers accept
-no liability for misuse. See the ⚠️ notice above.
+## License
+
+No warranty. For authorized security assessment, research, and education only.
