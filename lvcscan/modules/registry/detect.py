@@ -87,6 +87,7 @@ DETECTORS: List[Dict[str, Any]] = [
     {"name": "api_tunnel_bypass", "module": "modules.detection.api_tunnel_bypass", "func": "scan", "category": "behavioral", "scope": "app-specific", "requires_auth": True, "description": "Transaction API data accessible without ECDH/AES tunnel (plain session)"},
     {"name": "html_config_disclosure", "module": "modules.detection.html_config_disclosure", "func": "scan", "category": "exposure", "scope": "generic", "description": "Cleartext config/SSO/env markers exposed in served HTML"},
     {"name": "header_cookie_hygiene", "module": "modules.detection.header_cookie_hygiene", "func": "scan", "category": "exposure", "scope": "generic", "description": "Missing security headers / EOL PHP disclosure / weak cookie flags"},
+    {"name": "host_header_injection", "module": "modules.detection.host_header_injection", "func": "scan", "category": "behavioral", "scope": "generic", "description": "Host / X-Forwarded-Host reflected into redirect targets or body URLs (reset-link poisoning primitive; benign canary, GET-only, non-mutating)"},
 ]
 
 def get_detectors() -> List[Dict[str, Any]]:

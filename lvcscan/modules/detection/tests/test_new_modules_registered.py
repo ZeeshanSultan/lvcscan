@@ -7,7 +7,8 @@ from modules.cves import CVE_METADATA, import_scan, module_path_for
 
 NEW = ["ckfinder_connector_config","ci_language_lfi","cookie_reflection_xss",
        "ci_admin_reflected_xss","ci_admin_blind_sqli","ci_role_field_privesc",
-       "api_tunnel_bypass","html_config_disclosure","header_cookie_hygiene"]
+       "api_tunnel_bypass","html_config_disclosure","header_cookie_hygiene",
+       "host_header_injection"]
 
 def test_all_new_detectors_registered_and_importable():
     dets = get_detectors()
@@ -18,8 +19,8 @@ def test_all_new_detectors_registered_and_importable():
         mod = importlib.import_module(d["module"])
         assert hasattr(mod, d["func"]), f"{n}.{d['func']} missing"
 
-def test_detector_count_is_53():
-    assert len(get_detectors()) == 53
+def test_detector_count_is_54():
+    assert len(get_detectors()) == 54
 
 
 def test_all_registered_detectors_import():
