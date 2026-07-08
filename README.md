@@ -3,8 +3,9 @@
 Detection and exploitation of **30 known CVEs** across the Laravel ecosystem — the framework,
 first-party packages (Reverb, Pulse, Fortify, Livewire), common third-party packages, and popular
 Laravel apps — plus **24 misconfiguration / exposure detectors** (`.env`, `.git`, debug tools,
-mass-assignment, and more). One scanner (`lvcscan/check.py`), one detect+exploit module per CVE, and a
-matching Docker lab (vulnerable + hardened twin) for every one.
+mass-assignment, host-header injection, and more) and **subdomain enumeration** to find the hosts worth
+scanning. One scanner (`lvcscan/check.py`), one detect+exploit module per CVE, and a matching Docker lab
+(vulnerable + hardened twin) for every one.
 
 **Authorized use only.** Run this against systems you own or are contracted to test, or the bundled
 labs. It exercises public CVEs with public PoCs; using it outside an authorized scope may be illegal.
@@ -21,6 +22,8 @@ cd lvcscan
 
 python3 check.py --list                                  # all CVEs, ranked, with required flags
 python3 check.py https://target                          # detect-only sweep
+python3 check.py example.com --enum-subdomains --threads 32   # find live/Laravel subdomains
+python3 check.py example.com --enum-subdomains --scan-subdomains  # + sweep each Laravel host
 python3 check.py https://target --cve CVE-2021-3129 --exploit --cmd id
 python3 check.py https://target --cve CVE-2023-46865 --exploit --cmd id -U admin@site -P pass
 python3 check.py https://target --cve CVE-2024-55555 --exploit --cmd id --app-key base64:...
@@ -29,6 +32,9 @@ python3 check.py https://target --json-out report.json --proxy http://127.0.0.1:
 
 | Flag | Purpose |
 | --- | --- |
+| `--enum-subdomains` | Recon: DNS brute-force + crt.sh, probe which subdomains are live/Laravel |
+| `--scan-subdomains` | With `--enum-subdomains`: run the detect (or `--exploit`) pipeline against each Laravel host |
+| `--threads <N>` | Workers for concurrent recon (DNS + probing), 1–64; per-host CVE work stays sequential |
 | `--cve <ID>` | Target a single CVE (omit to sweep all) |
 | `--exploit` | Attempt exploitation (default is detect-only) |
 | `--cmd <cmd>` | Command to run for RCE modules |
@@ -50,12 +56,13 @@ lvcscan/
   check.py                    entry point
   modules/
     cves/                     one detect+exploit module per CVE, + metadata.py (catalog)
-    detection/                non-CVE detectors (.env, git, debug tools, …) + tests/
+    detection/                non-CVE detectors (.env, git, debug tools, host-header, …) + tests/
+    recon/                    subdomain enumeration (DNS brute-force + crt.sh)
     exploitation/ helpers/    shared exploitation + pipeline helpers
     generators/php_gadgets/   pure-python POP chains (Laravel/Guzzle/Monolog/Symfony)
     probes/ registry/ core/   APP_KEY recovery, registries, HTTP config
   vuln-labs/                  dual-port Docker labs (see vuln-labs/README.md)
-  wordlists/  docs/           recon lists; CVE catalog (docs/laravel_cves.csv)
+  wordlists/  docs/           recon lists (subdomains, paths); CVE catalog (docs/laravel_cves.csv)
 ```
 
 ## Labs
