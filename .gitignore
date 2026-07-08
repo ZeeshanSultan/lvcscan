@@ -12,3 +12,6 @@ __pycache__/
 !.env.example
 *.sqlite
 database.sqlite
+
+# Internal audit/remediation notes — keep local, do not publish
+LAB_BENCHMARK_*.md
