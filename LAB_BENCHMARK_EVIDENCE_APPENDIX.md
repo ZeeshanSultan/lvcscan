@@ -13,10 +13,12 @@
 > | CVE-2024-55661 | 🔴 hardcoded success | **🔴 (gated)** | nonce gate now blocks the fake `uid=`; module reports honestly, not "EXPLOITED" (`ef53feb`) |
 > | CVE-2017-14775 | 🔴 timing-as-RCE | 🔴 **relabeled** | class → `timing_info_disclosure`, severity Medium (`ef53feb`) |
 > | CVE-2025-27515 | 🟡 RCE-labeled | 🟡 **relabeled** | class → `file_validation_bypass` (advisory: not RCE) (`ef53feb`) |
-> | CVE-2023-43661 | 🟡 chained_rce | 🟡 **relabeled** | class → `ssti_config_disclosure` (`ef53feb`) |
+> | CVE-2023-43661 | 🟡 chained_rce | **🟢 FAITHFUL RCE** | verified real chained RCE (SSTI→APP_KEY→Laravel-5.2 deser, uid=33); class `ssti_chained_rce` (`da045cf`) — supersedes the earlier `ssti_config_disclosure` relabel |
+> | CVE-2022-25838 | 🔴 secret-handed | **🟢 FAITHFUL** | rebuilt: real TOTP validation, secret not disclosed, `/otp-intercept` = captured code (AC:H), vuln replay / hardened reject (`9065c0b`) |
 > | CVE-2016-10074 | 🔴 mislabeled | 🔴 **relabeled** | class → `swiftmailer_dependency_rce` (not Laravel) (`ef53feb`) |
 > | CVE-2022-2870/2886 | 🔴 synthetic | 🔴 **relabeled** | class → `disputed_app_deser_pattern` (`ef53feb`) |
-> | CVE-2020-24940/24941 | 🔴/🟡 | 🔴 **documented** | guarded bypass **empirically NOT reproducible** — honest note added (`69f5169`) |
+> | CVE-2020-24940 | 🔴 "strawman" | **🟢 FAITHFUL** | verified via SQL: `users.is_admin` defeats app key-filter, writes is_admin=1 — real table-strip priv-esc (`da045cf`) |
+> | CVE-2020-24941 | 🔴/🟡 | 🔴 **documented** | guarded bypass **empirically NOT reproducible** ($guarded model; guard holds) (`69f5169`) |
 > | CVE-2020-19316 | 🔴 fabricated sink | 🔴 **documented** | Windows-only; not reproducible on Linux (`69f5169`) |
 > | CVE-2021-28254 | 🟡 custom sink | 🟡 **documented** | sink is inherent to the CVE; gadget genuine (`69f5169`) |
 

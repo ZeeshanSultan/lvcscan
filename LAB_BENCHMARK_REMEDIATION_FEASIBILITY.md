@@ -8,11 +8,14 @@
 >
 > **DONE — faithful rebuilds (verified with real RCE):** CVE-2025-54068 (real authed sink) ✅ ·
 > CVE-2021-43617 (real 8.70.2 `.phar` bypass) ✅ · CVE-2018-15133 (real `.env` key leak+recover) ✅ key-axis ·
-> CVE-2026-23524 (real `laravel/reverb` 1.6.3 → root RCE + real 1.7.0 hardened) ✅.
+> CVE-2026-23524 (real `laravel/reverb` 1.6.3 → root RCE + real 1.7.0 hardened) ✅ ·
+> **CVE-2023-43661** (verified real chained SSTI→APP_KEY→deser RCE; class restored to `ssti_chained_rce`) ✅ ·
+> **CVE-2022-25838** (rebuilt faithful TOTP capture-replay: real validation, no secret handout, `/otp-intercept` = AC:H capture) ✅ ·
+> **CVE-2020-24940** (verified via SQL: `users.is_admin` defeats the app key-filter and writes is_admin=1 — real table-strip priv-esc; the earlier "strawman/HARD" assessment below is SUPERSEDED) ✅.
 >
-> **DONE — honestly documented (empirically NOT faithfully rebuildable):** CVE-2020-24940/24941 — booted the
-> lab and confirmed the framework `$guarded` holds against JSON-path/nested/table-prefix keys, so the advisory's
-> guarded bypass does not reproduce ✅ · CVE-2020-19316 — Windows-only `mklink`, infeasible on this Linux host ✅ ·
+> **DONE — honestly documented (empirically NOT faithfully rebuildable):** CVE-2020-24941 — booted the lab and
+> confirmed the framework `$guarded` holds against JSON-path/nested/table-prefix keys, so the advisory's guarded
+> bypass does not reproduce ✅ · CVE-2020-19316 — Windows-only `mklink`, infeasible on this Linux host ✅ ·
 > CVE-2021-28254 — `/deserialize` sink is inherent to the CVE, gadget genuine ✅.
 >
 > **NOT DONE (marginal / hard, deliberately deferred):** CVE-2024-52301 detector no longer keying on the lab

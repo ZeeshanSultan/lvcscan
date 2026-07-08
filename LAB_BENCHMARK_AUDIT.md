@@ -1,5 +1,13 @@
 # Laravel CVE Benchmark — Engineering Audit
 
+> ## ⤴ SUPERSEDING UPDATE — 3 more CVEs now faithful (advisory reconciliation)
+> After a per-CVE advisory re-check, three items in the body/status below were re-verified and turned
+> out **better than first assessed** — all now 🟢 faithful and matching their advisories:
+> - **CVE-2023-43661 (Cachet)** — NOT disclosure-only. Verified real **chained RCE** (SSTI→APP_KEY→Laravel 5.2 X-XSRF deser via Guzzle/RCE1 → `uid=33(www-data)`). Class restored to `ssti_chained_rce` (the earlier relabel to `ssti_config_disclosure` had understated it AND broken the auto-chain).
+> - **CVE-2020-24940** — NOT a strawman. Verified via the emitted SQL that `users.is_admin` defeats the app key-filter and writes `is_admin=1` (bare key blocked) — a genuine table-name-stripping priv-esc (CWE-20).
+> - **CVE-2022-25838 (Fortify)** — rebuilt faithful: real TOTP validation, secret never disclosed, `/otp-intercept` models the AC:H captured code, vuln allows replay / hardened rejects reuse.
+> So the "hard floor / not-rebuildable" claims below for 24940 and 43661 are **superseded**.
+>
 > ## ✅ REMEDIATION STATUS (post-audit update)
 > The body below is the **as-found** forensic record (what was rigged/broken at audit time). It is
 > preserved intact. The following was subsequently fixed and **verified live** (suite 170/170 throughout):
