@@ -17,6 +17,7 @@ import http.client
 import inspect
 import os
 import ssl
+import threading
 from typing import Dict, Optional
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -37,14 +38,22 @@ BROWSER_USER_AGENT = (
 _proxies: Optional[Dict[str, str]] = None
 _verify_default: Optional[bool] = None  # None = leave requests library default per call
 _trace_http = False  # OFF by default; --trace-http sets this True
-_active_module: Optional[str] = None
+# Active-module label is THREAD-LOCAL: a threaded detect phase (--threads N) attributes each
+# worker's requests to its own module instead of racing a single global. Off-thread -> None.
+_active_module_tls = threading.local()
 _extra_headers: Dict[str, str] = {}  # user-supplied -H headers, injected into every request
 _patched = False
 _orig_session_request = None
+_stats_lock = threading.Lock()  # guards _request_stats under concurrent detect
 _request_stats = {
     "total": 0,
     "module": {},
 }
+
+
+def _get_active_module() -> Optional[str]:
+    """Current thread's active-module label (None if unset on this thread)."""
+    return getattr(_active_module_tls, "value", None)
 
 
 def disable_trace() -> None:
@@ -100,15 +109,18 @@ def clear_proxy_env() -> None:
 
 
 def set_active_module(name: Optional[str]) -> None:
-    """Label the next HTTP trace lines (check.py sets this per CVE/module)."""
-    global _active_module
-    _active_module = name
+    """Label the next HTTP trace lines (check.py sets this per CVE/module).
+
+    Thread-local: safe to call from concurrent detect workers without cross-attribution.
+    """
+    _active_module_tls.value = name
 
 
 def reset_request_stats() -> None:
     """Reset request counters used for probe/detect/exploit costing."""
     global _request_stats
-    _request_stats = {"total": 0, "module": {}}
+    with _stats_lock:
+        _request_stats = {"total": 0, "module": {}}
 
 
 def get_request_stats() -> Dict[str, object]:
@@ -118,16 +130,17 @@ def get_request_stats() -> Dict[str, object]:
       - total: total number of HTTP requests sent through this patch
       - module: per-module call counts (keyed by module label)
 
-    The returned object is a shallow copy so callers can safely calculate deltas.
+    The returned object is a deep copy so callers can safely calculate deltas.
     """
-    return copy.deepcopy(_request_stats)
+    with _stats_lock:
+        return copy.deepcopy(_request_stats)
 
 
 def _record_request_stats() -> None:
-    _request_stats["total"] += 1
     mod = _guess_caller_module()
-    bucket = _request_stats["module"].setdefault(mod, 0)
-    _request_stats["module"][mod] = bucket + 1
+    with _stats_lock:
+        _request_stats["total"] += 1
+        _request_stats["module"][mod] = _request_stats["module"].get(mod, 0) + 1
 
 
 def record_manual_request(method: str, url: str) -> None:
@@ -284,8 +297,9 @@ def is_enabled() -> bool:
 
 def _guess_caller_module() -> str:
     """Best-effort module label from the call stack for HTTP trace lines."""
-    if _active_module:
-        return _active_module
+    _am = _get_active_module()
+    if _am:
+        return _am
     for frame_info in inspect.stack()[2:12]:
         path = frame_info.filename or ""
         func = frame_info.function or ""
