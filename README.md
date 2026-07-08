@@ -1,9 +1,10 @@
 # lvcscan
 
-Detection and exploitation of known CVEs across the Laravel ecosystem — the framework, first-party
-packages (Reverb, Pulse, Fortify, Livewire), common third-party packages, and popular Laravel apps.
-One scanner (`lvcscan/check.py`), one module per CVE, and a matching Docker lab (vulnerable + hardened
-twin) for every module.
+Detection and exploitation of **30 known CVEs** across the Laravel ecosystem — the framework,
+first-party packages (Reverb, Pulse, Fortify, Livewire), common third-party packages, and popular
+Laravel apps — plus **24 misconfiguration / exposure detectors** (`.env`, `.git`, debug tools,
+mass-assignment, and more). One scanner (`lvcscan/check.py`), one detect+exploit module per CVE, and a
+matching Docker lab (vulnerable + hardened twin) for every one.
 
 **Authorized use only.** Run this against systems you own or are contracted to test, or the bundled
 labs. It exercises public CVEs with public PoCs; using it outside an authorized scope may be illegal.
