@@ -1516,6 +1516,29 @@ def run_exploitation(target_url, only_cve=None, do_exploit=False,
 
 
 
+def _print_subdomain_results(res):
+    """Render enumerate_subdomains() output (main thread only)."""
+    if not res.get("ok"):
+        print_status(f"Subdomain enumeration failed: {res.get('error')}", "error")
+        return
+    print_separator()
+    print_status(f"Subdomain enumeration: {res['domain']}", "info")
+    if res.get("wildcard"):
+        print_status(f"Wildcard DNS active ({', '.join(res['wildcard_ips'])}); "
+                     f"{res['dropped_wildcard']} wildcard hit(s) filtered.", "warning")
+    print_status(f"Tried {res['candidates_tried']} candidate(s) ({res['crtsh_names']} from crt.sh) "
+                 f"-> {res['resolved']} resolved.", "info")
+    laravel = [s for s in res["subdomains"] if s.get("is_laravel")]
+    for s in res["subdomains"]:
+        st = s.get("http_status")
+        st_s = f" http={st}" if st is not None else ""
+        tag = (f"  {Fore.RED}{Style.BRIGHT}[LARAVEL]{Style.RESET_ALL}" if s.get("is_laravel") else "")
+        print(f"    {Fore.YELLOW}{s['host']}{Style.RESET_ALL}  {', '.join(s['ips'])}"
+              f"  [{s['source']}]{st_s}{tag}")
+    print_status(f"{len(laravel)} live Laravel host(s) found.", "success" if laravel else "info")
+    print_separator()
+
+
 def main():
     show_banner()
     print_separator()
@@ -1554,6 +1577,17 @@ def main():
     )
     parser.add_argument("--cve", metavar="CVE-YYYY-NNNNN", default=None,
                         help="Limit to a single CVE (scan, and exploit if --exploit).")
+    parser.add_argument("--enum-subdomains", dest="enum_subdomains", action="store_true",
+                        help="Enumerate subdomains of the target host (DNS brute-force + crt.sh), probe "
+                             "which are live/Laravel, then exit (or sweep with --scan-subdomains).")
+    parser.add_argument("--scan-subdomains", dest="scan_subdomains", action="store_true",
+                        help="With --enum-subdomains: run a detect (or --exploit) pass against each "
+                             "discovered live Laravel host, sequentially.")
+    parser.add_argument("--subdomain-wordlist", dest="subdomain_wordlist", metavar="PATH", default=None,
+                        help="Override the bundled subdomain wordlist (wordlists/subdomains.txt).")
+    parser.add_argument("--threads", type=int, default=16, metavar="N",
+                        help="Workers for concurrent recon (subdomain DNS + live-host probing); clamped "
+                             "1-64. Per-host CVE detection/exploitation stays sequential.")
     parser.add_argument("-U", "--username", default=None, help="Auth username for exploits that need it.")
     parser.add_argument("-P", "--password", default=None, help="Auth password for exploits that need it.")
     parser.add_argument("--command", "--cmd", dest="command", default=None,
@@ -1694,6 +1728,37 @@ def main():
     # branch (exploit dispatch below, or the detect-all fall-through) — the single point every
     # actual scan flows through, before is_laravel()/discovery seeds the memo.
     reset_run_memo()
+
+    # --enum-subdomains: recon mode. Enumerate the target host's subdomains (threaded DNS + crt.sh),
+    # probe live/Laravel, optionally sweep each Laravel host. Runs before the CVE pipeline and exits.
+    if getattr(args, "enum_subdomains", False):
+        if not args.url:
+            print(f"{Fore.YELLOW}[?] Enter target domain: {Style.RESET_ALL}", end="")
+            args.url = input().strip()
+        _init_http_from_args(args)
+        from modules.recon.subdomain_enum import enumerate_subdomains, default_http_probe
+        _res = enumerate_subdomains(
+            args.url, threads=args.threads,
+            wordlist=args.subdomain_wordlist, http_probe=default_http_probe,
+        )
+        _print_subdomain_results(_res)
+        if getattr(args, "scan_subdomains", False) and _res.get("ok"):
+            _hosts = [s for s in _res["subdomains"] if s.get("is_laravel")]
+            print_status(f"Sweeping {len(_hosts)} Laravel host(s) sequentially "
+                         f"({'exploit' if (args.exploit or args.force) else 'detect'} mode)...", "info")
+            _res["scans"] = []
+            for _s in _hosts:
+                _u = ("https://" if _s.get("https") else "http://") + _s["host"]
+                _sp = run_exploitation(
+                    _u, do_exploit=bool(args.exploit or args.force),
+                    username=args.username, password=args.password,
+                    command=args.command, app_key=args.app_key,
+                    exploit_policy=("forced" if args.force else args.exploit_policy),
+                    in_house=getattr(args, "in_house", False), extra_options=extra_options,
+                )
+                _res["scans"].append({"host": _s["host"], "summary": _sp.get("summary")})
+        _write_json_report(args.json_out, _res)
+        return
 
     # --exploit / --cve / --force: route to the exploitation pipeline (separate from detect-all).
     if args.exploit or args.cve or args.force:
