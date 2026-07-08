@@ -15,3 +15,6 @@ database.sqlite
 
 # Internal audit/remediation notes — keep local, do not publish
 LAB_BENCHMARK_*.md
+
+# Curated catalog is docs/laravel_cves.csv; keep xlsx masters local, not in repo
+*.xlsx

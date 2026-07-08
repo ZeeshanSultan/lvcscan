@@ -55,7 +55,7 @@ lvcscan/
     generators/php_gadgets/   pure-python POP chains (Laravel/Guzzle/Monolog/Symfony)
     probes/ registry/ core/   APP_KEY recovery, registries, HTTP config
   vuln-labs/                  dual-port Docker labs (see vuln-labs/README.md)
-  wordlists/  docs/           recon lists; CVE catalog spreadsheet
+  wordlists/  docs/           recon lists; CVE catalog (docs/laravel_cves.csv)
 ```
 
 ## Labs

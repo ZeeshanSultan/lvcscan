@@ -78,18 +78,15 @@ def test_all_cves_have_exploit_precondition_metadata():
         assert "- APP_KEY Required:" in text, f"{cve} missing APP_KEY flag"
 
 
-def test_workbook_preconditions_match_unified_cve_metadata():
-    from openpyxl import load_workbook
+def test_catalog_csv_preconditions_match_unified_cve_metadata():
+    import csv
 
     root = Path(__file__).resolve().parents[3]
-    workbook = root / "docs" / "Laravel_Vulnerabilities.xlsx"
-    wb = load_workbook(workbook, read_only=True, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    headers = {name: idx for idx, name in enumerate(rows[0]) if name}
-    for row in rows[1:]:
-        cve = str(row[headers["CVE"]]).strip()
-        assert cve in CVE_METADATA, f"{cve} missing from unified CVE metadata"
-        expected = "\n".join(CVE_METADATA[cve].preconditions or []).strip()
-        actual = str(row[headers["Exploit Pre-conditions"]] or "").strip()
-        assert actual == expected, f"{cve} workbook preconditions drifted from metadata"
+    catalog = root / "docs" / "laravel_cves.csv"
+    with open(catalog, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            cve = (row.get("CVE") or "").strip()
+            assert cve in CVE_METADATA, f"{cve} missing from unified CVE metadata"
+            expected = "\n".join(CVE_METADATA[cve].preconditions or []).strip()
+            actual = (row.get("Exploit Pre-conditions") or "").strip()
+            assert actual == expected, f"{cve} catalog preconditions drifted from metadata"

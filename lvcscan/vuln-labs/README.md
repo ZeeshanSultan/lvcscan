@@ -13,7 +13,7 @@ Docker labs for validating CVE detection, exploitation, and mitigation via repo-
 | `first-party/` | Laravel-maintained packages (Reverb, Pulse, Fortify, Horizon, Livewire). Path: `first-party/<package>/<version>/cve-<id>_<attack>_<ports>/` |
 | `framework/` | `laravel/framework` behaviors in a minimal host. Path: `framework/laravel/<version>/cve-<id>_<attack>_<ports>/` |
 
-CVE inventory and mitigation steps: `docs/Laravel_Vulnerabilities.xlsx`.
+CVE inventory and mitigation steps: `docs/laravel_cves.csv`.
 
 ## Apps Inventory
 
