@@ -17,6 +17,19 @@ import sys
 from modules.core import http_config
 from modules.core.http_config import app_url
 
+# Console output is SILENT when used as a library detector (the registry consumes the
+# returned list; banners would pollute the driver's output and JSON-adjacent stdout).
+# Standalone `python mass_assignment_checker.py` sets _VERBOSE=True in __main__. This
+# module-local shadow gates every print() below without touching each call site.
+_VERBOSE = False
+_real_print = print
+
+
+def print(*args, **kwargs):  # noqa: A001 - intentional module-local shadow of builtin
+    if _VERBOSE:
+        _real_print(*args, **kwargs)
+
+
 # ANSI color codes for terminal output
 class Colors:
     CRITICAL = '\033[91m'    # Red
@@ -159,12 +172,17 @@ def check_endpoint(sess, base_url: str, endpoint: str, method: str = 'POST',
     }
 
     try:
-        if method == 'POST':
-            response = sess.post(url, json=payload, headers=headers,
-                                   timeout=timeout, allow_redirects=False)
-        else:  # PUT
-            response = sess.put(url, json=payload, headers=headers,
-                                  timeout=timeout, allow_redirects=False)
+        # Mass-assignment writes attempt privilege escalation / persistent-state change
+        # (creating admins, overwriting balances). That is DESTRUCTIVE — it requires the
+        # destructive ceiling (--allow-destructive / --force), so --allow-active alone
+        # yields only surface enumeration, never an admin write.
+        with http_config.request_tier(http_config.DESTRUCTIVE):
+            if method == 'POST':
+                response = sess.post(url, json=payload, headers=headers,
+                                       timeout=timeout, allow_redirects=False)
+            else:  # PUT
+                response = sess.put(url, json=payload, headers=headers,
+                                      timeout=timeout, allow_redirects=False)
 
         status_code = response.status_code
 
@@ -204,6 +222,9 @@ def check_endpoint(sess, base_url: str, endpoint: str, method: str = 'POST',
         # Reachable, but not a success status and not a vuln indicator.
         return None, status_code
 
+    except http_config.RequestBlocked:
+        # Tier gate: surface to _safe_scan as a visible 'blocked_by_policy' verdict.
+        raise
     except requests.exceptions.Timeout:
         pass
     except requests.exceptions.ConnectionError:
@@ -322,6 +343,7 @@ def scan(target_url: str, *, session=None, username=None, password=None, **kwarg
 
 # Example usage
 if __name__ == "__main__":
+    _VERBOSE = True  # standalone CLI: re-enable the colored progress/summary output
     # Example: results = scan("https://example.com")
     # This will print colored output and return all vulnerabilities found
     pass

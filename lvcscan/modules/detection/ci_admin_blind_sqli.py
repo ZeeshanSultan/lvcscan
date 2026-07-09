@@ -61,39 +61,41 @@ def scan(
     base = normalize_base(target_url)
     probe_params = params if params is not None else _DEFAULT_PARAMS
 
+    def _get(value):
+        try:
+            u = app_url(base, endpoint) + "?" + urlencode({param: value})
+            return sess.get(u, timeout=10, allow_redirects=False)
+        except Exception:
+            return None
+
+    def _ratio(a, b):
+        la, lb = len(a.text), len(b.text)
+        base_len = max(la, lb, 1)
+        return abs(la - lb) / base_len
+
     for param in probe_params:
-        try:
-            baseline_url = app_url(base, endpoint) + "?" + urlencode({param: "1"})
-            r_baseline = sess.get(baseline_url, timeout=10, allow_redirects=False)
-        except Exception:
+        # Two identical baselines establish the page's NATURAL variance (CSRF tokens,
+        # timestamps, rotating banners routinely differ between two identical requests).
+        b1, b2 = _get("1"), _get("1")
+        if b1 is None or b2 is None:
+            continue
+        natural = _ratio(b1, b2)
+        # A hit must exceed natural variance by a margin, not a flat 10%.
+        margin = max(_LEN_DIFF_THRESHOLD, natural * 3)
+
+        # Boolean/error differential: an UNBALANCED tick breaks the query (error/different),
+        # while a BALANCED even-tick value is valid SQL and should behave like the baseline.
+        err = _get("1'")            # odd quotes -> syntax error if injectable
+        valid = _get("1''")         # even quotes -> valid -> baseline-like if injectable
+        if err is None or valid is None:
             continue
 
-        if r_baseline is None:
-            continue
+        err_diverges = (err.status_code != b1.status_code) or (_ratio(err, b1) > margin)
+        valid_matches = (valid.status_code == b1.status_code) and (_ratio(valid, b1) <= margin)
+        # Baseline must itself be stable, else the endpoint is just noisy (not SQLi).
+        baseline_stable = (b1.status_code == b2.status_code) and (natural <= _LEN_DIFF_THRESHOLD)
 
-        try:
-            tick_url = app_url(base, endpoint) + "?" + urlencode({param: "1'"})
-            r_tick = sess.get(tick_url, timeout=10, allow_redirects=False)
-        except Exception:
-            continue
-
-        if r_tick is None:
-            continue
-
-        baseline_len = len(r_baseline.text)
-        tick_len = len(r_tick.text)
-        len_delta = abs(tick_len - baseline_len)
-
-        # Determine significant length difference (avoid divide-by-zero)
-        if baseline_len > 0:
-            len_diff_ratio = len_delta / baseline_len
-        else:
-            len_diff_ratio = 1.0 if len_delta > 0 else 0.0
-
-        status_diverged = r_tick.status_code != r_baseline.status_code
-        len_diverged = len_diff_ratio > _LEN_DIFF_THRESHOLD
-
-        if status_diverged or len_diverged:
+        if baseline_stable and err_diverges and valid_matches:
             return {
                 "vulnerable": True,
                 "path": endpoint,
@@ -102,14 +104,16 @@ def scan(
                 "command_capable": False,
                 "detonated": False,
                 "confirm": {
-                    "baseline_status": r_baseline.status_code,
-                    "tick_status": r_tick.status_code,
-                    "len_delta": len_delta,
+                    "baseline_status": b1.status_code,
+                    "error_tick_status": err.status_code,
+                    "valid_tick_status": valid.status_code,
+                    "natural_variance": round(natural, 4),
+                    "error_ratio": round(_ratio(err, b1), 4),
                 },
                 "note": (
-                    "Boolean/error differential on single-tick probe "
-                    "(prove-not-detonate; no data extracted). "
-                    "Blind SQLi candidate."
+                    "Boolean/error differential: unbalanced tick diverges while the "
+                    "balanced even-tick value matches baseline, beyond the page's natural "
+                    "variance (prove-not-detonate; no data extracted)."
                 ),
             }
 

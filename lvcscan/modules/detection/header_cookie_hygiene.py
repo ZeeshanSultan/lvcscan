@@ -102,17 +102,36 @@ def scan(
 
     findings = analyze_headers(r.headers)
 
-    if findings["missing_headers"] or findings["eol_php"] or findings["weak_cookies"]:
+    # Missing security headers alone are INFORMATIONAL — nearly every site lacks at
+    # least one of CSP/Permissions-Policy/Referrer-Policy, so treating that as a
+    # vulnerability made this fire on almost everything. Only EOL-PHP disclosure or
+    # weak cookie flags are a real (low-severity) finding.
+    real_issue = bool(findings["eol_php"] or findings["weak_cookies"])
+
+    if real_issue:
         return {
             "vulnerable": True,
+            "verdict": "confirmed_vulnerable",
+            "severity": "Low",
             "path": "/",
             "vuln_class": "info_disclosure",
             "detonated": False,
             "confirm": findings,
-            "note": (
-                "Header/cookie hygiene gaps: missing security headers / "
-                "EOL PHP disclosure / weak cookie flags."
-            ),
+            "note": "EOL PHP disclosure / weak cookie flags."
+                    + (" Also missing security headers." if findings["missing_headers"] else ""),
+        }
+
+    if findings["missing_headers"]:
+        return {
+            "vulnerable": False,
+            "verdict": "surface_present",
+            "severity": "Info",
+            "path": "/",
+            "vuln_class": "info_disclosure",
+            "detonated": False,
+            "confirm": findings,
+            "note": "Missing security headers (informational): "
+                    + ", ".join(findings["missing_headers"]),
         }
 
     return None

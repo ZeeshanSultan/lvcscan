@@ -27,6 +27,8 @@ import string
 from typing import Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
+# Hard cap on the total DNS-resolution wall clock (seconds) regardless of candidate count.
+_MAX_RESOLVE_WALL = 60.0
 _WORDLIST = os.path.join(os.path.dirname(__file__), "..", "..", "wordlists", "subdomains.txt")
 _LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
@@ -107,13 +109,29 @@ def _default_crtsh_fetch(url: str) -> Optional[str]:
         return None
 
 
+def _is_private_ip(ip: str) -> bool:
+    """True for RFC1918 / loopback / link-local / ULA addresses (scope hygiene tag)."""
+    if ip.startswith(("127.", "10.", "192.168.", "169.254.", "::1", "fc", "fd", "fe80")):
+        return True
+    if ip.startswith("172."):
+        try:
+            return 16 <= int(ip.split(".")[1]) <= 31
+        except (IndexError, ValueError):
+            return False
+    return False
+
+
 def default_http_probe(host: str, *, timeout: float = 6.0) -> Dict:
-    """HTTPS-then-HTTP liveness + best-effort Laravel fingerprint. Never raises."""
+    """HTTPS-then-HTTP liveness + best-effort Laravel fingerprint. Never raises.
+
+    Redirects are NOT followed: a crt.sh-sourced host that 301s to an unrelated third
+    party must not drag the probe off-target (scope/SSRF hygiene).
+    """
     from modules.core import http_config
     for scheme, https in (("https", True), ("http", False)):
         try:
             sess = http_config.get_auth_session()
-            r = sess.get(f"{scheme}://{host}", timeout=timeout, verify=False, allow_redirects=True)
+            r = sess.get(f"{scheme}://{host}", timeout=timeout, verify=False, allow_redirects=False)
         except Exception:
             continue
         is_laravel = False
@@ -129,8 +147,11 @@ def default_http_probe(host: str, *, timeout: float = 6.0) -> Dict:
 
 def _detect_wildcard(domain: str, resolver: Callable[[str], Set[str]]) -> Set[str]:
     """Return the union of IPs a wildcard record answers with (empty set = no wildcard)."""
+    # Sample more random labels so a wildcard that round-robins across a CDN's IP pool
+    # is captured more completely (3 samples missed rotating pools, causing both FP
+    # survivors and FN drops in the subset filter).
     wildcard_ips: Set[str] = set()
-    for _ in range(3):
+    for _ in range(8):
         rand = "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(12))
         wildcard_ips |= resolver(f"{rand}-lvcscan.{domain}")
     return wildcard_ips
@@ -174,15 +195,26 @@ def enumerate_subdomains(
         candidates |= crt_names
     candidates.discard(domain)
 
-    # --- Resolve concurrently, each under a wall-clock timeout ---
+    # --- Resolve concurrently under a GLOBAL wall-clock budget ---
+    # NB: fut.result(timeout=) inside as_completed() is a no-op — as_completed only
+    # yields already-finished futures — and the `with` block's shutdown(wait=True)
+    # joins every worker, so a single hung getaddrinfo (default resolv.conf timeouts
+    # run 30s+) stalled the whole enumeration. We wait on a bounded budget instead and
+    # shut down WITHOUT joining, so a stuck resolver thread can never hang the run.
     resolved: Dict[str, Set[str]] = {}
     dropped_wildcard = 0
-    with _cf.ThreadPoolExecutor(max_workers=threads) as pool:
+    budget = min(
+        _MAX_RESOLVE_WALL,
+        max(resolve_timeout, resolve_timeout * (len(candidates) / max(1, threads) + 2)),
+    )
+    pool = _cf.ThreadPoolExecutor(max_workers=threads)
+    try:
         futs = {pool.submit(resolver, host): host for host in candidates}
-        for fut in _cf.as_completed(futs):
+        done, _pending = _cf.wait(futs, timeout=budget)
+        for fut in done:
             host = futs[fut]
             try:
-                ips = fut.result(timeout=resolve_timeout)
+                ips = fut.result()
             except Exception:
                 ips = set()
             if not ips:
@@ -192,6 +224,9 @@ def enumerate_subdomains(
                 dropped_wildcard += 1
                 continue
             resolved[host] = ips
+    finally:
+        # wait=False + cancel_futures: return immediately; never block on a hung lookup.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # --- Live-host + Laravel probe (concurrent, best-effort) ---
     subs: List[Dict] = []
@@ -207,14 +242,18 @@ def enumerate_subdomains(
                     probes[host] = {}
         for host in sorted(resolved):
             p = probes.get(host, {})
-            subs.append(SubdomainResult(host=host, ips=sorted(resolved[host]),
+            _ips = sorted(resolved[host])
+            subs.append(SubdomainResult(host=host, ips=_ips,
                                         source="crtsh" if host in crt_names else "bruteforce",
+                                        private=all(_is_private_ip(ip) for ip in _ips),
                                         http_status=p.get("status"), https=p.get("https"),
                                         is_laravel=bool(p.get("is_laravel"))))
     else:
         for host in sorted(resolved):
-            subs.append(SubdomainResult(host=host, ips=sorted(resolved[host]),
-                                        source="crtsh" if host in crt_names else "bruteforce"))
+            _ips = sorted(resolved[host])
+            subs.append(SubdomainResult(host=host, ips=_ips,
+                                        source="crtsh" if host in crt_names else "bruteforce",
+                                        private=all(_is_private_ip(ip) for ip in _ips)))
 
     return {
         "ok": True,

@@ -1,4 +1,8 @@
-requests
-colorama
-urllib3
-cryptography
+# Pinned to compatible ranges. http_config monkeypatches requests.Session.request
+# by its (self, method, url, **kwargs) signature; a requests major bump could change
+# that contract, so cap the major. _assert_requests_signature() in http_config verifies
+# the signature at import as a fail-fast guard if these are overridden.
+requests>=2.28,<3
+colorama>=0.4,<0.5
+urllib3>=1.26,<3
+cryptography>=41,<46

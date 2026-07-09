@@ -2,7 +2,13 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 from modules.detection.ckfinder_connector_config import scan, parse_connector_config
 
-INIT_JSON = '{"uploadCheckImages":false,"resourceTypes":[{"name":"Images","allowedExtensions":"gif,jpg,png","deniedExtensions":"php,php3,exe"}]}'
+# SAFE config: an allowlist of gif/jpg/png blocks phar/php7 even though they aren't in
+# the denylist. This must NOT be flagged (the old code did — a false RCE).
+INIT_JSON_SAFE = '{"uploadCheckImages":false,"resourceTypes":[{"name":"Images","allowedExtensions":"gif,jpg,png","deniedExtensions":"php,php3,exe"}]}'
+# VULNERABLE config: no allowlist and phar/php7 are not denied -> dangerous ext accepted.
+INIT_JSON_VULN = '{"uploadCheckImages":false,"resourceTypes":[{"name":"Files","allowedExtensions":"","deniedExtensions":"php,php3,exe"}]}'
+# Kept for the denylist-gap parse assertion (factual gap computation).
+INIT_JSON = INIT_JSON_SAFE
 
 class FakeResp:
     def __init__(self, status=200, text="", headers=None):
@@ -24,13 +30,18 @@ def test_parse_flags_disabled_validation_and_blocklist_gaps():
     assert "php7" in v["blocklist_gaps"] and "phar" in v["blocklist_gaps"]
 
 def test_scan_confirms_reachable_but_never_uploads():
-    sess = FakeSession({"/admin/image_manager/connector.html?command=Init": FakeResp(200, INIT_JSON)})
+    sess = FakeSession({"/admin/image_manager/connector.html?command=Init": FakeResp(200, INIT_JSON_VULN)})
     res = scan("https://t", session=sess)
     assert res and res["vulnerable"] is True
     assert res["vuln_class"] == "rce"
     assert res.get("command_capable") is True
     assert res.get("detonated") is False
     assert sess.posted == [], "module must not upload (prove-not-detonate)"
+
+def test_scan_safe_allowlist_is_not_flagged():
+    # Allowlist blocks dangerous exts -> reachable connector, but NOT an RCE primitive.
+    sess = FakeSession({"/admin/image_manager/connector.html?command=Init": FakeResp(200, INIT_JSON_SAFE)})
+    assert scan("https://t", session=sess) is None
 
 def test_scan_returns_none_when_no_connector():
     sess = FakeSession({})  # all 404

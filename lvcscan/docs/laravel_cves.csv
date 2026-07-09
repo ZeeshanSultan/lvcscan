@@ -191,6 +191,14 @@ https://github.com/advisories/GHSA-57qh-vmjr-5jxg
 https://github.com/snipe/snipe-it/releases/tag/v7.0.10
 https://snipe-it.readme.io/docs/key-rotation
 https://www.synacktiv.com/advisories/snipe-it-unauthenticated-remote-command-execution-when-appkey-known",modules/cves/cve_2024_48987.py
+CVE-2024-52301,2024-11-12,High,High,Laravel environment/session manipulation with register_argc_argv,"Laravel is a web application framework. When the register_argc_argv php directive is set to on , and users call any URL with a special crafted query string, they are able to change the environment used by the framework when handling the request. The vulnerability fixed in 6.20.45, 7.30.7, 8.83.28, 9.52.17, 10.48.23, and 11.31.0. The framework now ignores argv values for environment detection on non-cli SAPIs.",None,"Auth: none (unauthenticated)
+APP_KEY: not required
+Affected: laravel/framework < 6.20.45 / 7.30.7 / 8.83.28 / 9.52.17 / 10.48.23 / 11.31.0
+Trigger: PHP register_argc_argv=On and attacker can influence the query string (overrides the resolved Laravel environment)
+Command-capable: no
+Scenario: config-dependent",vuln-labs/framework/laravel/11.30.0/cve-2024-52301_env-argv-flip_39006-40006,"Upgrade to a patched release: 6.20.45, 7.30.7, 8.83.28, 9.52.17, 10.48.23, or 11.31.0 (the 11.x fix is commit 18b326d2; the 8.x branch fix is commit eded6bdfc05af9b5437d107b4d092558fe46292c — same runningInConsole() gate). The patched framework only consults $_SERVER['argv'] for environment detection when running in the console SAPI. Config-level mitigation without upgrading: set the PHP directive register_argc_argv=Off in php.ini, which stops PHP from populating $_SERVER['argv'] from the query string on web requests and removes the attacker-controllable input entirely.
+Fix ref: https://github.com/laravel/framework/commit/18b326d22d831e1fe05e737209e367e30796d5f3",https://nvd.nist.gov/vuln/detail/CVE-2024-52301,"https://nvd.nist.gov/vuln/detail/CVE-2024-52301
+https://github.com/Nyamort/CVE-2024-52301",modules/cves/cve_2024_52301.py
 CVE-2024-55555,2024-12-16,High,High,Invoice Ninja route/hash deserialization RCE,"Invoice Ninja pre-auth deserialization RCE: a public route feeds an attacker string to decrypt(); with a known/default APP_KEY the blob is unserialized into a POP chain, yielding unauthenticated RCE.",Requires APP_KEY,"Auth: none (unauthenticated)
 APP_KEY: required
 Affected: Invoice Ninja < 5.10.43 (validated exploitable 5.8.22-5.10.10)
@@ -231,14 +239,6 @@ https://www.cve.org/CVERecord?id=CVE-2024-29291
 https://www.exploit-db.com/exploits/52000
 https://laravel.com/docs/13.x/deployment
 https://laravel.com/docs/13.x/structure",modules/cves/cve_2024_29291.py
-CVE-2024-52301,2024-11-12,High,Medium,Laravel environment/session manipulation with register_argc_argv,"Laravel is a web application framework. When the register_argc_argv php directive is set to on , and users call any URL with a special crafted query string, they are able to change the environment used by the framework when handling the request. The vulnerability fixed in 6.20.45, 7.30.7, 8.83.28, 9.52.17, 10.48.23, and 11.31.0. The framework now ignores argv values for environment detection on non-cli SAPIs.",None,"Auth: none (unauthenticated)
-APP_KEY: not required
-Affected: laravel/framework < 6.20.45 / 7.30.7 / 8.83.28 / 9.52.17 / 10.48.23 / 11.31.0
-Trigger: PHP register_argc_argv=On and attacker can influence the query string (overrides the resolved Laravel environment)
-Command-capable: no
-Scenario: config-dependent",vuln-labs/framework/laravel/11.30.0/cve-2024-52301_env-argv-flip_39006-40006,"Upgrade to a patched release: 6.20.45, 7.30.7, 8.83.28, 9.52.17, 10.48.23, or 11.31.0 (the 11.x fix is commit 18b326d2; the 8.x branch fix is commit eded6bdfc05af9b5437d107b4d092558fe46292c — same runningInConsole() gate). The patched framework only consults $_SERVER['argv'] for environment detection when running in the console SAPI. Config-level mitigation without upgrading: set the PHP directive register_argc_argv=Off in php.ini, which stops PHP from populating $_SERVER['argv'] from the query string on web requests and removes the attacker-controllable input entirely.
-Fix ref: https://github.com/laravel/framework/commit/18b326d22d831e1fe05e737209e367e30796d5f3",https://nvd.nist.gov/vuln/detail/CVE-2024-52301,"https://nvd.nist.gov/vuln/detail/CVE-2024-52301
-https://github.com/Nyamort/CVE-2024-52301",modules/cves/cve_2024_52301.py
 CVE-2022-2886,2022-08-19,High,Low,Laravel 5.1 POP gadget chain requiring a custom unsafe unserialize() sink,"Laravel 5.1 gadget-chain report that is only exploitable when an application exposes an unsafe unserialize() sink. The reproducible lab now supplies that sink synthetically at /deserialize, base64-decodes attacker-controlled request parameters, and unserializes the decoded PHP object so the module can prove marker execution and --command execution. Laravel 5.1 presence alone remains insufficient.",None in synthetic lab; real targets depend on the app-owned sink exposure.,"Auth: none (unauthenticated)
 APP_KEY: not required
 Affected: Laravel 5.1.0-5.1.46 (per NVD/VulDB; duplicate of CVE-2022-2870)

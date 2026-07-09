@@ -27,6 +27,16 @@ class CveMetadata:
     requires_auth: bool = False
     lab_default_creds: Optional[tuple[str, str]] = None
     preconditions: list[str] | None = None
+    # Provenance (Phase 0.3) — keeps a lab-only / disputed / unverified sink from
+    # being framed as a working framework RCE in reports and the headline count.
+    #   integrity:    confirmed | disputed | synthetic-sink | lab-only | unverified
+    #   sink_realism: framework | app-sink-required | lab-synthetic
+    #   working_rce:  True only when the module drives a real product sink end-to-end
+    #   nvd_status:   published | reserved | none
+    integrity: str = "confirmed"
+    sink_realism: str = "framework"
+    working_rce: Optional[bool] = None
+    nvd_status: str = "published"
 
     @property
     def cve_meta_tuple(self) -> tuple[str, str, bool, bool, bool]:
@@ -55,6 +65,14 @@ class CveMetadata:
             spec["pass_creds"] = True
         if self.scope != "generic":
             spec["scope"] = self.scope
+        if self.integrity != "confirmed":
+            spec["integrity"] = self.integrity
+        if self.sink_realism != "framework":
+            spec["sink_realism"] = self.sink_realism
+        if self.working_rce is not None:
+            spec["working_rce"] = self.working_rce
+        if self.nvd_status != "published":
+            spec["nvd_status"] = self.nvd_status
         return spec
 
 
@@ -497,7 +515,7 @@ _CVE_ROWS = [{'cve': 'CVE-2017-16894',
  {'cve': 'CVE-2024-52301',
   'slug': 'cve_2024_52301',
   'module': 'modules.cves.cve_2024_52301',
-  'severity': 'Medium',
+  'severity': 'High',  # GHSA-gv7v-rgg6-548h rates this High (CVSS 8.7); was Medium
   'vuln_class': 'config_manipulation',
   'category': 'cve',
   'description': 'Environment/session manipulation via register_argc_argv',
@@ -1280,8 +1298,34 @@ def _canonical_preconditions(row: Dict[str, Any]) -> list[str]:
     ]
 
 
+# Integrity provenance (Phase 0.3). Kept as one readable table rather than editing
+# every row: a CVE ABSENT here is confirmed/framework/published by default. Every row
+# here is still shipped and still exercised by its lab — labeled, not removed.
+_INTEGRITY_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # Future-dated / uncorroborated; default gadget forges a non-existent PHPUnit class.
+    "CVE-2026-23524": {"integrity": "unverified", "sink_realism": "lab-synthetic",
+                       "working_rce": False, "nvd_status": "none"},
+    # Third-party package RCE with no locatable NVD record; lab-invented pending a reference.
+    "CVE-2025-14894": {"integrity": "unverified", "sink_realism": "lab-synthetic",
+                       "working_rce": False, "nvd_status": "none"},
+    # Real deserialization CVE, but exploitation needs an app-provided unserialize sink;
+    # the shipped exploit fires at a lab-only route, not a framework-generic one.
+    "CVE-2018-15133": {"sink_realism": "app-sink-required", "working_rce": False},
+    "CVE-2021-28254": {"sink_realism": "app-sink-required", "working_rce": False},
+    # Command-injection CLASS reproduced via a lab-authored /storage/link route.
+    "CVE-2020-19316": {"sink_realism": "lab-synthetic", "working_rce": False},
+    # Disputed VulDB community rows; synthetic app-level sink, not stock Laravel.
+    "CVE-2022-2870": {"integrity": "disputed", "sink_realism": "lab-synthetic", "working_rce": False},
+    "CVE-2022-2886": {"integrity": "disputed", "sink_realism": "lab-synthetic", "working_rce": False},
+    # Real SwiftMailer dependency CVE but no lab present / untested end-to-end here.
+    "CVE-2016-10074": {"sink_realism": "app-sink-required", "working_rce": False},
+}
+
 for _row in _CVE_ROWS:
     _row["preconditions"] = _canonical_preconditions(_row)
+    _ov = _INTEGRITY_OVERRIDES.get(_row["cve"])
+    if _ov:
+        _row.update(_ov)
 
 CVE_METADATA: Dict[str, CveMetadata] = {row["cve"]: CveMetadata(**row) for row in _CVE_ROWS}
 CVE_META = {cve: meta.cve_meta_tuple for cve, meta in CVE_METADATA.items()}
@@ -1329,6 +1373,16 @@ def slug_for(cve: str) -> str:
 
 def all_cves() -> list[str]:
     return list(CVE_METADATA)
+
+
+def confirmed_cves() -> list[str]:
+    """CVEs whose integrity is 'confirmed' — the honest headline set, excluding
+    disputed / unverified / lab-invented rows (which are still shipped and scanned)."""
+    return [cve for cve, meta in CVE_METADATA.items() if meta.integrity == "confirmed"]
+
+
+def confirmed_cve_count() -> int:
+    return len(confirmed_cves())
 
 
 def all_slugs() -> list[str]:

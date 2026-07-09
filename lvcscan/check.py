@@ -3,6 +3,8 @@ import argparse
 import inspect
 import json
 import os
+import re
+import sys
 import requests
 from datetime import datetime
 from urllib.parse import urlparse
@@ -25,6 +27,7 @@ from modules.registry.exploit import (
 )
 from modules.registry.detect import get_detectors, _import_detector
 from modules.registry import requires_component_map
+from modules.cves.metadata import CVE_METADATA, confirmed_cve_count
 from modules.cves import import_scan
 from modules.helpers.pipeline import (
     PipelineContext,
@@ -347,9 +350,27 @@ def _print_cve_list():
         if key_req:
             flags.append("--app-key")
         flag_s = (" [" + ", ".join(flags) + "]") if flags else ""
-        print(f"    {Fore.YELLOW}{cve}{Style.RESET_ALL}  {Fore.CYAN}{vclass}{Style.RESET_ALL}{flag_s}")
+        # Provenance tag (Phase 0.3/3): a disputed / unverified / lab-only sink must not
+        # read as an equivalent working framework CVE.
+        _meta = CVE_METADATA.get(cve)
+        _tag = ""
+        if _meta is not None:
+            _tags = []
+            if _meta.integrity != "confirmed":
+                _tags.append(_meta.integrity.upper())
+            if _meta.working_rce is False and _meta.command_capable:
+                _tags.append("NOT-WORKING-RCE")
+            elif _meta.sink_realism != "framework":
+                _tags.append(_meta.sink_realism.upper())
+            if _tags:
+                _tag = f"  {Fore.RED}[{', '.join(_tags)}]{Style.RESET_ALL}"
+        print(f"    {Fore.YELLOW}{cve}{Style.RESET_ALL}  {Fore.CYAN}{vclass}{Style.RESET_ALL}{flag_s}{_tag}")
     print()
-    print_status(f"{len(CVE_META)} exploit-capable CVEs. Use --cve <ID> --exploit to run one.", "info")
+    _confirmed = confirmed_cve_count()
+    print_status(
+        f"{len(CVE_META)} catalog CVEs ({_confirmed} confirmed; "
+        f"{len(CVE_META) - _confirmed} disputed/unverified/lab-only). "
+        f"Use --cve <ID> --exploit to run one.", "info")
 
 
 def _print_exploit_result(cve, res):
@@ -835,11 +856,76 @@ def _safe_scan(name: str, fn, *args, **kwargs):
     try:
         http_config.set_active_module(name)
         return fn(*args, **kwargs)
+    except http_config.RequestBlocked as e:
+        # Tier gate (Phase 0.1): not a crash — the module tried a request above the
+        # authorized ceiling. Render as a first-class, visible non-hit verdict.
+        print_status(f"    {name}: {e}", "info")
+        return {
+            "verdict": "blocked_by_policy",
+            "status": "blocked_by_policy",
+            "vulnerable": False,
+            "reason": str(e),
+        }
     except Exception as e:
         print_status(f"{name} crashed during scan: {e}", "error")
         return None
     finally:
         http_config.set_active_module(None)
+
+
+def _prompt_target(label: str) -> str:
+    """Prompt for a target, but fail cleanly (exit 2) when stdin is not interactive
+    or hits EOF — piping an empty stdin used to crash with an uncaught EOFError.
+    """
+    if not sys.stdin.isatty():
+        print_status("No target provided and stdin is not a TTY. Pass the URL as an argument.", "error")
+        raise SystemExit(2)
+    try:
+        print(f"{Fore.YELLOW}[?] {label}: {Style.RESET_ALL}", end="")
+        return input().strip()
+    except EOFError:
+        print_status("No target provided (EOF on stdin).", "error")
+        raise SystemExit(2)
+
+
+def _coerce_opt_value(key: str, value: str):
+    """Coerce a --opt VALUE: strict signed integers become int, everything else stays
+    a string. `app_key` is never coerced. Guards the old crash where '--5' passed
+    str.lstrip('-').isdigit() yet int('--5') raised ValueError.
+    """
+    if key == "app_key":
+        return value
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    return value
+
+
+def _authorized_tier_from_args(args) -> str:
+    """Resolve the process-wide request ceiling from CLI intent.
+
+    Default is PASSIVE (read-only). --allow-active permits benign mutating probes;
+    --allow-destructive permits state-changing exploitation. The exploit pipeline
+    raises the floor for the operator: --exploit ⇒ ACTIVE, --force ⇒ DESTRUCTIVE,
+    so today's `--cve X --exploit` / `--force` runs keep full capability with no new
+    flag. Returns the highest tier any signal authorizes.
+    """
+    tier = http_config.PASSIVE
+    rank = http_config._TIER_RANK
+
+    def _raise_to(t):
+        nonlocal tier
+        if rank[t] > rank[tier]:
+            tier = t
+
+    if getattr(args, "exploit", False):
+        _raise_to(http_config.ACTIVE)
+    if getattr(args, "allow_active", False):
+        _raise_to(http_config.ACTIVE)
+    if getattr(args, "allow_destructive", False):
+        _raise_to(http_config.DESTRUCTIVE)
+    if getattr(args, "force", False):
+        _raise_to(http_config.DESTRUCTIVE)
+    return tier
 
 
 def _is_positive_finding(res, *, vuln_class=None):
@@ -858,6 +944,14 @@ def _init_http_from_args(args):
     proxy = getattr(args, "proxy", None)
     no_trace = getattr(args, "no_trace", False)  # kept for compat; now a no-op
     trace_http_on = getattr(args, "trace_http", False)
+
+    # Safety-tier ceiling (Phase 0.1). Default PASSIVE: a bare `check.py <url>` run
+    # sends no mutating/third-party traffic. Opt in with --allow-active/-destructive
+    # or the exploit pipeline (--exploit/--force) which raise the ceiling automatically.
+    _tier = _authorized_tier_from_args(args)
+    http_config.set_authorized_tier(_tier)
+    if _tier != http_config.PASSIVE:
+        print_status(f"Request ceiling: {_tier} (active/destructive probes armed)", "warning")
 
     # --trace-http: enable per-request URL logging (off by default).
     if trace_http_on:
@@ -1614,6 +1708,16 @@ def main():
              "--opt oob_read_url=http://target/reverb-oob for scanner readback, or "
              "--opt oob_read_url=https://attacker.oast.site/ for target POST callback. Values are strings; "
              "purely-numeric values are coerced to int (so redis_port=6379 arrives as an int).")
+    parser.add_argument(
+        "--allow-active", dest="allow_active", action="store_true",
+        help="Authorize ACTIVE requests (mutating POST/PUT/PATCH/DELETE and timing-injection "
+             "probes). Default scans are read-only; without this (or --exploit/--force) active "
+             "detectors are gated and reported 'blocked_by_policy'.")
+    parser.add_argument(
+        "--allow-destructive", dest="allow_destructive", action="store_true",
+        help="Authorize DESTRUCTIVE requests (state-changing exploitation: admin/balance writes, "
+             "log truncate+poison, broker PUBLISH, webshell drop, live-session cookie override). "
+             "Implies --allow-active. Use only on systems you are authorized to attack.")
     parser.add_argument("--list", action="store_true",
                         help="List all exploit-capable CVEs ranked by Independent severity, then exit.")
     parser.add_argument("--list-detectors", action="store_true",
@@ -1686,7 +1790,7 @@ def main():
         if _k == "app_key" and not _v:
             print_status("Ignoring --opt app_key=: empty APP_KEY.", "warning")
             continue
-        extra_options[_k] = int(_v) if _k != "app_key" and _v.lstrip("-").isdigit() else _v
+        extra_options[_k] = _coerce_opt_value(_k, _v)
     if args.method:
         extra_options["method"] = args.method.upper()
     if args.params is not None:
@@ -1733,8 +1837,7 @@ def main():
     # probe live/Laravel, optionally sweep each Laravel host. Runs before the CVE pipeline and exits.
     if getattr(args, "enum_subdomains", False):
         if not args.url:
-            print(f"{Fore.YELLOW}[?] Enter target domain: {Style.RESET_ALL}", end="")
-            args.url = input().strip()
+            args.url = _prompt_target("Enter target domain")
         _init_http_from_args(args)
         from modules.recon.subdomain_enum import enumerate_subdomains, default_http_probe
         _res = enumerate_subdomains(
@@ -1763,8 +1866,7 @@ def main():
     # --exploit / --cve / --force: route to the exploitation pipeline (separate from detect-all).
     if args.exploit or args.cve or args.force:
         if not args.url:
-            print(f"{Fore.YELLOW}[?] Enter target URL: {Style.RESET_ALL}", end="")
-            args.url = input().strip()
+            args.url = _prompt_target("Enter target URL")
         _init_http_from_args(args)
         _exploit_target = normalize_base(args.url)
         _warn_if_deep_link(_exploit_target)
@@ -1787,8 +1889,7 @@ def main():
         return
 
     if not args.url:
-        print(f"{Fore.YELLOW}[?] Enter target URL: {Style.RESET_ALL}", end="")
-        args.url = input().strip()
+        args.url = _prompt_target("Enter target URL")
 
     target_url = normalize_base(args.url)
 

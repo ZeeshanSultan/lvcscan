@@ -53,6 +53,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from modules.core import http_config
+
 requests.packages.urllib3.disable_warnings(
     requests.packages.urllib3.exceptions.InsecureRequestWarning
 )
@@ -327,7 +329,14 @@ def _between_markers(text: str, marker: str) -> Optional[str]:
 
 
 def _resp_publish(host: str, port: int, channel: str, message: str, timeout: float = 6.0):
-    """Minimal raw-RESP Redis PUBLISH (no redis library, no docker shell-out)."""
+    """Minimal raw-RESP Redis PUBLISH (no redis library, no docker shell-out).
+
+    This is a WRITE to a third-party broker that bypasses the `requests` choke point,
+    so it is gated explicitly: under the default passive ceiling it raises
+    RequestBlocked before any socket work (no unsolicited write on a plain scan).
+    """
+    from modules.core import http_config as _hc
+    _hc.guard_nonhttp(_hc.ACTIVE, f"redis {host}:{port} PUBLISH {channel}")
     msg_bytes = message.encode("latin-1", "replace")
     chan_bytes = channel.encode("latin-1", "replace")
     cmd = (
@@ -460,6 +469,9 @@ def scan(target_url: str, *, session=None, username=None, password=None, options
             }
             if ok and isinstance(n, int) and n >= 1:
                 redis_fp = f"Redis PUBLISH {REDIS_CHANNEL} @ {redis_host}:{redis_port} -> {n} subscriber(s)"
+        except http_config.RequestBlocked as e:
+            # Default passive scan: HTTP-fingerprint only, no unsolicited broker write.
+            result["artifacts"]["redis_gated"] = str(e)
         except Exception as e:
             result["artifacts"]["redis_error"] = f"{type(e).__name__}: {e}"
 

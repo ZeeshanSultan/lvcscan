@@ -7,6 +7,7 @@ for accessible git configuration files that may leak sensitive repository
 information and source code.
 """
 
+import re
 import requests
 from typing import Dict, List, Optional, Union
 
@@ -107,18 +108,14 @@ def _is_git_exposed(response: requests.Response, path: str) -> bool:
                 return True
         
         elif path.endswith('/config'):
-            # Config file should contain git configuration sections
-            config_indicators = [
-                '[core]',
-                'repositoryformatversion',
-                '[remote',
-                '[branch',
-                'filemode',
-                'bare',
-                'logallrefupdates'
-            ]
-            
-            if any(indicator in content for indicator in config_indicators):
+            # Require a STRONG git-config anchor. The old list included bare substrings
+            # ('bare', 'filemode') that match unrelated words in an HTML soft-404 served
+            # 200 at /.git/config. A real git config always carries a "[core]" section
+            # header with "repositoryformatversion"; require that pairing (or an explicit
+            # remote/branch section header alongside [core]).
+            has_core = '[core]' in content and 'repositoryformatversion' in content
+            has_section = bool(re.search(r'^\[(remote |branch |core\])', content, re.MULTILINE))
+            if has_core or (has_section and 'repositoryformatversion' in content):
                 return True
         
     except Exception:

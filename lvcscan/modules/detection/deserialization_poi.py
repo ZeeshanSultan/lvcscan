@@ -109,10 +109,13 @@ def scan(target_url: str, *, session=None, username=None, password=None, **kwarg
                 if result:
                     return result
         
+    except http_config.RequestBlocked:
+        # Surface the tier gate as a visible blocked_by_policy verdict via _safe_scan.
+        raise
     except Exception:
         # Silently handle all exceptions
         pass
-    
+
     return None
 
 
@@ -150,7 +153,9 @@ def _test_post_injection(url: str, payload: str, sess) -> Optional[Dict[str, Uni
                 "status_code": response.status_code,
                 "response_snippet": response.text[:200]
             }
-            
+
+    except http_config.RequestBlocked:
+        raise
     except Exception:
         pass
     
@@ -176,13 +181,17 @@ def _test_cookie_injection(url: str, payload: str, sess) -> Optional[Dict[str, U
             'cache_key': payload
         }
 
-        response = sess.get(
-            url,
-            cookies=cookies,
-            timeout=3,
-            allow_redirects=False
-        )
-        
+        # Overwriting a live laravel_session with a serialized-object payload corrupts
+        # the victim session and drives deserialization — DESTRUCTIVE, even though the
+        # verb is GET (so method classification would otherwise treat it as passive).
+        with http_config.request_tier(http_config.DESTRUCTIVE):
+            response = sess.get(
+                url,
+                cookies=cookies,
+                timeout=3,
+                allow_redirects=False
+            )
+
         if _is_vulnerable_response(response):
             return {
                 "url": url,
@@ -191,10 +200,12 @@ def _test_cookie_injection(url: str, payload: str, sess) -> Optional[Dict[str, U
                 "status_code": response.status_code,
                 "response_snippet": response.text[:200]
             }
-            
+
+    except http_config.RequestBlocked:
+        raise
     except Exception:
         pass
-    
+
     return None
 
 
@@ -238,7 +249,9 @@ def _test_json_injection(url: str, payload: str, sess) -> Optional[Dict[str, Uni
                 "status_code": response.status_code,
                 "response_snippet": response.text[:200]
             }
-            
+
+    except http_config.RequestBlocked:
+        raise
     except Exception:
         pass
     

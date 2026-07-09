@@ -29,21 +29,24 @@ _COOKIES_GET_RE = re.compile(r"Cookies\.get\(['\"]([^'\"]+)['\"]\)")
 # Regex to detect document.cookie access (raw cookie string)
 _DOC_COOKIE_RE = re.compile(r"document\.cookie")
 
-# Patterns that indicate unsafe DOM sink (unencoded write into DOM).
-# Only actual DOM-write sinks are listed here — bare string-concat patterns
-# were dropped because they fire on any var + 'string' near a Cookies.get(),
-# causing false positives on code that never touches the DOM.
-_UNSAFE_SINK_PATTERNS = [
-    r"\.html\s*\(",
-    r"innerHTML\s*=",
-    r"\.append\s*\(",
-    r"document\.write\s*\(",
-    r"\.dialog\s*\(",
-    r"message\s*:",
+# Unsafe DOM-write sinks. Each template takes {v} = the value expression that must
+# actually appear AS (part of) the sink's argument — i.e. real dataflow, not mere
+# proximity. `[^;]{0,120}` keeps the match inside the same statement. The old approach
+# flagged any sink token within ~200 chars of any Cookies.get(), so minified jQuery/
+# bootstrap bundles trivially tripped it; the loose `message:` pattern is gone.
+_SINK_ARG_TEMPLATES = [
+    r"\.html\(\s*[^;]{{0,120}}{v}",
+    r"\.append\(\s*[^;]{{0,120}}{v}",
+    r"\.prepend\(\s*[^;]{{0,120}}{v}",
+    r"\.after\(\s*[^;]{{0,120}}{v}",
+    r"\.before\(\s*[^;]{{0,120}}{v}",
+    r"innerHTML\s*=\s*[^;]{{0,120}}{v}",
+    r"outerHTML\s*=\s*[^;]{{0,120}}{v}",
+    r"document\.write\(\s*[^;]{{0,120}}{v}",
+    r"\.dialog\(\s*\{{[^;]{{0,200}}{v}",
 ]
-_UNSAFE_SINK_RE = re.compile("|".join(_UNSAFE_SINK_PATTERNS))
 
-# Patterns that indicate safe encoding wrapper
+# Patterns that indicate a safe encoding wrapper in the same segment.
 _SAFE_WRAPPER_PATTERNS = [
     r"\.text\s*\(",
     r"escapeHtml\s*\(",
@@ -53,43 +56,46 @@ _SAFE_WRAPPER_PATTERNS = [
 ]
 _SAFE_WRAPPER_RE = re.compile("|".join(_SAFE_WRAPPER_PATTERNS))
 
-# Window size to check for nearby sink usage
-_WINDOW = 200
-
 
 def find_cookie_dom_sinks(html: str) -> List[str]:
-    """Return list of cookie names that flow into an unencoded DOM sink.
+    """Return cookie names whose value actually FLOWS into an unencoded DOM sink.
 
-    Searches for Cookies.get('NAME') references. For each match, checks
-    within a ~200-char window whether the value is used in an unsafe DOM
-    sink (.html(), innerHTML, append(), string concat) WITHOUT a safe
-    encoding wrapper (.text(), escapeHtml, encodeURIComponent, etc.).
+    For each Cookies.get('NAME'):
+      * the value expressions that must reach a sink are the call itself AND any
+        variable it is directly assigned to (var x = Cookies.get('NAME')), and
+      * a finding requires one of those expressions to appear as (part of) an unsafe
+        DOM-write argument in the SAME statement, with no safe wrapper (.text(),
+        escapeHtml, encodeURIComponent, DOMPurify) around it.
 
-    Also handles document.cookie access as a generic flag (no specific name).
-
-    Returns the list of flagged cookie names (strings). Empty list = safe.
+    Proximity alone no longer flags. Returns the flagged cookie names (empty = safe).
     """
     flagged: List[str] = []
 
-    # Check Cookies.get('name') patterns
     for m in _COOKIES_GET_RE.finditer(html):
         cookie_name = m.group(1)
-        # Grab the window around and after the match
-        start = max(0, m.start() - 50)
-        end = min(len(html), m.end() + _WINDOW)
-        window = html[start:end]
+        full_call = m.group(0)  # Cookies.get('NAME')
 
-        # Check for unsafe sink in window
-        if not _UNSAFE_SINK_RE.search(window):
-            continue
+        # Value expressions that carry the tainted cookie value.
+        exprs = [re.escape(full_call)]
+        assign = re.search(r"\b([A-Za-z_$][\w$]*)\s*=\s*" + re.escape(full_call), html)
+        if assign:
+            exprs.append(re.escape(assign.group(1)) + r"\b")
 
-        # Check for safe wrapper — if it wraps the variable, do not flag
-        # Strategy: look for a .text( that appears in the same statement
-        # as the cookie reference. We look for .text( in the window.
-        if _SAFE_WRAPPER_RE.search(window):
-            continue
-
-        flagged.append(cookie_name)
+        hit = False
+        for v in exprs:
+            for tmpl in _SINK_ARG_TEMPLATES:
+                mm = re.search(tmpl.format(v=v), html)
+                if not mm:
+                    continue
+                seg = html[max(0, mm.start() - 40): mm.end() + 20]
+                if _SAFE_WRAPPER_RE.search(seg):
+                    continue  # value is encoded before the sink
+                hit = True
+                break
+            if hit:
+                break
+        if hit:
+            flagged.append(cookie_name)
 
     return flagged
 

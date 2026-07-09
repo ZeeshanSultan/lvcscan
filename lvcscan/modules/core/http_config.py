@@ -18,6 +18,7 @@ import inspect
 import os
 import ssl
 import threading
+from contextlib import contextmanager
 from typing import Dict, Optional
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -34,6 +35,60 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 )
+
+# ----------------------------------------------------------------------------
+# Request-classification safety tiers (Phase 0.1).
+#
+# Every outbound request is classified by the destructiveness of what it does.
+# The process carries an AUTHORIZED ceiling (default PASSIVE); any request whose
+# effective tier exceeds the ceiling is BLOCKED at the choke point below, never
+# silently sent. Capability is preserved — an operator raises the ceiling with
+# --allow-active / --allow-destructive (or the exploit pipeline raises it for
+# them). Nothing is deleted; destructive modules simply self-declare their tier.
+#
+#   PASSIVE      reads: GET/HEAD/OPTIONS, no body, no third-party writes
+#   ACTIVE       mutating HTTP (POST/PUT/PATCH/DELETE), timing-injection probes,
+#                raw sockets to app infrastructure
+#   DESTRUCTIVE  persistent state writes (admin/balance), log truncate+poison,
+#                broker PUBLISH, webshell/phar drop, live-session cookie stomp
+# ----------------------------------------------------------------------------
+PASSIVE = "passive"
+ACTIVE = "active"
+DESTRUCTIVE = "destructive"
+_TIER_RANK = {PASSIVE: 0, ACTIVE: 1, DESTRUCTIVE: 2}
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+class RequestBlocked(RuntimeError):
+    """Raised when a request's effective tier exceeds the authorized ceiling.
+
+    Callers (the per-module _safe_scan wrapper and the exploit runner) treat this
+    as a first-class, NON-error verdict ("blocked (needs --allow-active/...)") so
+    the gate is visible in the summary rather than looking like a crash.
+    """
+
+    def __init__(self, required_tier: str, authorized_tier: str, detail: str = ""):
+        self.required_tier = required_tier
+        self.authorized_tier = authorized_tier
+        flag = "--allow-destructive" if required_tier == DESTRUCTIVE else "--allow-active"
+        msg = (
+            f"blocked: {required_tier} request under {authorized_tier} ceiling "
+            f"(re-run with {flag}"
+            + (" / --force" if required_tier == DESTRUCTIVE else "")
+            + ")"
+        )
+        if detail:
+            msg = f"{msg} [{detail}]"
+        super().__init__(msg)
+        self.required_flag = flag
+
+
+# Process-wide authorized ceiling. Set once from configure()/_init_http_from_args.
+_authorized_tier = PASSIVE
+# Per-thread DECLARED tier for the current block (a module wraps its mutating lines
+# in `with request_tier(...)`). Thread-local so concurrent recon never leaks one
+# worker's declaration onto another — mirrors _active_module_tls below.
+_tier_ctx = threading.local()
 
 _proxies: Optional[Dict[str, str]] = None
 _verify_default: Optional[bool] = None  # None = leave requests library default per call
@@ -54,6 +109,74 @@ _request_stats = {
 def _get_active_module() -> Optional[str]:
     """Current thread's active-module label (None if unset on this thread)."""
     return getattr(_active_module_tls, "value", None)
+
+
+# ----------------------------------------------------------------------------
+# Safety-tier API (Phase 0.1)
+# ----------------------------------------------------------------------------
+def set_authorized_tier(tier: str) -> None:
+    """Set the process-wide authorized ceiling (PASSIVE/ACTIVE/DESTRUCTIVE)."""
+    global _authorized_tier
+    if tier not in _TIER_RANK:
+        raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(_TIER_RANK)}")
+    _authorized_tier = tier
+
+
+def get_authorized_tier() -> str:
+    return _authorized_tier
+
+
+def declared_tier() -> str:
+    """The current thread's declared tier for the active block (PASSIVE if unset)."""
+    return getattr(_tier_ctx, "value", None) or PASSIVE
+
+
+@contextmanager
+def request_tier(tier: str):
+    """Declare that requests inside this block operate at `tier`.
+
+    A detector/exploit wraps ONLY the lines that mutate:
+        with http_config.request_tier(http_config.DESTRUCTIVE):
+            sess.post(...)   # blocked unless the ceiling authorizes it
+    Restores the previous declaration on exit (even on exception), so a threaded
+    worker's declaration never escapes its block.
+    """
+    if tier not in _TIER_RANK:
+        raise ValueError(f"unknown tier {tier!r}")
+    prev = getattr(_tier_ctx, "value", None)
+    _tier_ctx.value = tier
+    try:
+        yield
+    finally:
+        _tier_ctx.value = prev
+
+
+def _method_tier(method: str) -> str:
+    """Baseline tier implied by the HTTP method (reads passive, writes active)."""
+    return ACTIVE if (method or "").upper() in _WRITE_METHODS else PASSIVE
+
+
+def _effective_tier(method: Optional[str]) -> str:
+    """Higher of the method-implied tier and the block's declared tier."""
+    m = _method_tier(method) if method else PASSIVE
+    d = declared_tier()
+    return m if _TIER_RANK[m] >= _TIER_RANK[d] else d
+
+
+def _enforce_tier(effective: str, detail: str = "") -> None:
+    if _TIER_RANK[effective] > _TIER_RANK[_authorized_tier]:
+        raise RequestBlocked(effective, _authorized_tier, detail)
+
+
+def guard_nonhttp(tier: str, target_desc: str = "") -> None:
+    """Authorize a NON-requests side effect (raw socket, broker PUBLISH, etc.).
+
+    Modules that reach past the `requests` layer (e.g. the Redis RESP publisher in
+    the Reverb CVE) MUST call this before the socket work so those effects obey the
+    same ceiling as HTTP traffic. Raises RequestBlocked when unauthorized.
+    """
+    effective = tier if _TIER_RANK[tier] >= _TIER_RANK[declared_tier()] else declared_tier()
+    _enforce_tier(effective, target_desc)
 
 
 def disable_trace() -> None:
@@ -213,6 +336,9 @@ def raw_http_request(
         path = f"{path}{sep}{raw_query}"
 
     display_url = f"{scheme}://{parsed.netloc}{path}"
+    # Safety-tier gate for the lower-level transport (mirrors the Session patch), so
+    # verbatim-byte probes and log-poison writes obey the same ceiling as `requests`.
+    _enforce_tier(_effective_tier(method), f"{method.upper()} {display_url}")
     record_manual_request(method, display_url)
 
     request_headers = {
@@ -312,11 +438,31 @@ def _guess_caller_module() -> str:
     return "?"
 
 
+def _assert_requests_signature() -> None:
+    """Fail fast if requests.Session.request no longer matches the (self, method, url,
+    **kwargs) contract the patch depends on. Guards against an unpinned requests bump
+    silently breaking proxy/header/tier injection."""
+    try:
+        params = list(inspect.signature(requests.Session.request).parameters.values())
+        names = [p.name for p in params]
+        if names[:3] != ["self", "method", "url"]:
+            raise RuntimeError(
+                "requests.Session.request signature changed "
+                f"(got {names[:3]}); http_config patch needs (self, method, url, **kwargs). "
+                "Pin 'requests<3' or update the patch."
+            )
+    except (ValueError, TypeError):
+        # Some builds expose a C/wrapped callable without an introspectable signature;
+        # don't block startup on that — the patch still forwards *args/**kwargs.
+        pass
+
+
 def _install_patch() -> None:
     global _patched, _orig_session_request
     if _patched:
         return
 
+    _assert_requests_signature()
     _orig_session_request = requests.Session.request
 
     def _patched_session_request(self, method, url, **kwargs):
@@ -327,6 +473,10 @@ def _install_patch() -> None:
         # leak it through and raise TypeError. Default False keeps every existing
         # call site's auth-forcing behavior byte-for-byte unchanged.
         no_auth = kwargs.pop("no_auth", False)
+        # Safety-tier gate (Phase 0.1): block before any network/stat work when the
+        # request's effective tier exceeds the authorized ceiling. Raised as
+        # RequestBlocked so the driver renders a "blocked (needs --allow-*)" verdict.
+        _enforce_tier(_effective_tier(method), f"{str(method).upper()} {url}")
         _record_request_stats()
         if _proxies is not None and not kwargs.get("proxies"):
             kwargs["proxies"] = _proxies

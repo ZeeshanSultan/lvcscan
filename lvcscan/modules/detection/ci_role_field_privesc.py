@@ -41,22 +41,29 @@ BOARD = "/admin/admin/index.html"
 # "type" only fires on name="type" / name=type / [type] (param references),
 # NOT on <input type="text"> or Content-Type headers.
 # "admin_group" is specific enough to match as a bare substring.
-_ROLE_FIELD_PATTERNS = [
-    ("type", re.compile(r'name=["\']?type["\']?|\[type\]', re.IGNORECASE)),
-    ("admin_group", re.compile(r'admin_group', re.IGNORECASE)),
-]
+_TYPE_FIELD_RE = re.compile(r'name=["\']?type["\']?|\[type\]', re.IGNORECASE)
+_ADMIN_GROUP_RE = re.compile(r'admin_group', re.IGNORECASE)
+# A role-mutation CONTEXT: the generic field name "type" is a role-controlling input
+# only when the page is actually about role mutation (a form posting to the role sink,
+# an admin_group field, or explicit role wording). Without this, "type" matched every
+# search/filter form's <select name="type">.
+_ROLE_CONTEXT_RE = re.compile(
+    r'updateType|admin_group|/admin/admin/|user_?role|change_?role|role[_-]?id|privilege',
+    re.IGNORECASE,
+)
 
 
 def _references_role_field(text: str) -> Optional[str]:
-    """Return the first matching role field name found in *text*, or None.
+    """Return a role-controlling field name found in *text*, or None.
 
-    Uses specific regex patterns so "type" only matches when it appears as a
-    form field NAME (name="type", name=type, [type]), not as a generic HTML
-    attribute (type="text") or HTTP header (Content-Type).
+    "admin_group" is specific enough to stand alone. "type" is generic (search/filter
+    forms use name="type"), so it only counts when a role-mutation context is also
+    present. Never matches a generic type="text" attribute or a Content-Type header.
     """
-    for field_name, pattern in _ROLE_FIELD_PATTERNS:
-        if pattern.search(text):
-            return field_name
+    if _ADMIN_GROUP_RE.search(text):
+        return "admin_group"
+    if _TYPE_FIELD_RE.search(text) and _ROLE_CONTEXT_RE.search(text):
+        return "type"
     return None
 
 
@@ -86,7 +93,9 @@ def scan(
     try:
         board_url = app_url(base, BOARD)
         r_board = sess.get(board_url, timeout=10, allow_redirects=False)
-        if r_board is not None and r_board.status_code != 404:
+        # Require a real authenticated 200. A 302->login / 401 / 403 is NOT a reachable
+        # sink — treating any non-404 as reachable produced false priv-esc findings.
+        if r_board is not None and r_board.status_code == 200:
             role_field_found = _references_role_field(r_board.text)
     except Exception:
         pass
@@ -97,7 +106,7 @@ def scan(
         try:
             sink_url = app_url(base, sink)
             r_sink = sess.get(sink_url, timeout=10, allow_redirects=False)
-            if r_sink is not None and r_sink.status_code != 404:
+            if r_sink is not None and r_sink.status_code == 200:
                 reachable_sink = sink
                 # Also check sink body for role-field reference if not found yet
                 if role_field_found is None:

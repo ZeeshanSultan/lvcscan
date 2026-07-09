@@ -7,6 +7,7 @@ error information, stack traces, and application debugging details that
 should not be publicly accessible.
 """
 
+import re
 import requests
 from typing import Dict, List, Optional, Union
 
@@ -52,17 +53,21 @@ def scan(target_url: str, *, session=None, username=None, password=None, **kwarg
         if response.status_code == 200:
             content = response.text
             
-            # Check for Laravel log indicators
+            # Laravel-log grammar only. The old '#0'/'#1' frame markers matched hex
+            # colors (#000) and inline CSS in a SPA catch-all page served 200 at the log
+            # path. Require a real Laravel log line: a "[YYYY-MM-DD HH:MM:SS] env.LEVEL:"
+            # header, or an explicit env.ERROR marker.
             log_indicators = [
                 'local.ERROR',
-                'production.ERROR', 
-                'Stack trace',
-                '#0',
-                '#1'
+                'production.ERROR',
             ]
-            
-            # If any indicator found, mark as exposed
-            if any(indicator in content for indicator in log_indicators):
+            _laravel_log_line = re.search(
+                r'\[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\]\s+\w+\.(?:DEBUG|INFO|NOTICE|WARNING|ERROR|CRITICAL|ALERT|EMERGENCY)\b',
+                content,
+            )
+
+            # If a Laravel log line or an explicit env.ERROR marker is found, mark exposed.
+            if _laravel_log_line or any(indicator in content for indicator in log_indicators):
                 return {
                     "path": log_path,
                     "url": full_url,

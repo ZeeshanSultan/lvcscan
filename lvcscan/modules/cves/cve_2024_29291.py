@@ -116,7 +116,7 @@ def scan(target_url, *, session=None, username=None, password=None, **kwargs):
             "status": "confirmed_vulnerable",
             "verdict": "confirmed_vulnerable",
             "proof_type": "read_only_credential_disclosure",
-            "severity": "High",
+            "severity": "Medium",  # single-source: matches CVE_METADATA (disputed info-disclosure)
             "category": "info_disclosure",
             "cve": "CVE-2024-29291",
             "http_status": response.status_code,

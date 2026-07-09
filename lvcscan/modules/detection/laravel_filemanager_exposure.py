@@ -54,31 +54,30 @@ def scan_detailed(url: str, *, session=None, username=None, password=None, **kwa
             '/backend/filemanager'
         ]
         
-        # Extended detection keywords
+        # SPECIFIC laravel-filemanager markers only. Generic words ('files', 'upload',
+        # 'images', 'tinymce', 'ckeditor') matched almost any HTML page and, with redirect
+        # following on, flagged arbitrary landing/login pages. These strings are emitted by
+        # UniSharp LFM itself (package name, asset paths, its stand-alone button/JS).
         extended_keywords = [
-            'filemanager',
-            'upload',
-            'files',
-            'images',
             'unisharp',
-            'lfm',
+            'laravel-filemanager',
             'laravel file manager',
-            'file browser',
-            'media manager',
-            'asset manager',
-            'tinymce',
-            'ckeditor',
-            'browse files'
+            'lfm.php',
+            '/lfm/',
+            'filemanager/js/',
+            'stand-alone-button',
+            'vendor/laravel-filemanager',
         ]
         
         for path in extended_paths:
             full_url = url + path
             
             try:
+                # Do NOT follow redirects: a 302 to /login is not an exposed file manager.
                 response = sess.get(
                     full_url,
                     timeout=10,
-                    allow_redirects=True
+                    allow_redirects=False
                 )
                 
                 if response.status_code == 200:

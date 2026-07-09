@@ -32,6 +32,7 @@ flow is unit-testable offline with a fake session.
 from __future__ import annotations
 
 import re
+import secrets
 from typing import Dict, List, Optional
 
 from modules.core import http_config
@@ -94,13 +95,19 @@ def _probe(sess, url: str, header: str, value: str):
     server sees the canary as the request host. Redirects are NOT followed — the
     poisoned Location is exactly the signal we want to inspect.
     """
-    headers = {header: value}
+    # Vector header FIRST (callers/tests read the first header item), then no-store.
+    # A per-probe cache-buster + Cache-Control: no-store make a poisoned response
+    # un-cacheable, so probing a live target can never seed a shared cache/CDN with
+    # the canary host and serve it to real users.
+    headers = {header: value, "Cache-Control": "no-store", "Pragma": "no-cache"}
+    sep = "&" if "?" in url else "?"
+    probe_url = f"{url}{sep}cb={secrets.token_hex(6)}"
     try:
-        return sess.get(url, headers=headers, timeout=10, allow_redirects=False, verify=False)
+        return sess.get(probe_url, headers=headers, timeout=10, allow_redirects=False, verify=False)
     except TypeError:
         # Fake/session without verify= kwarg (unit tests) — retry minimally.
         try:
-            return sess.get(url, headers=headers, timeout=10, allow_redirects=False)
+            return sess.get(probe_url, headers=headers, timeout=10, allow_redirects=False)
         except Exception:
             return None
     except Exception:
@@ -156,7 +163,16 @@ def scan(
     if not hits:
         return None
 
-    strong = [h for h in hits if h["reflection"] in ("location", "body_url")]
+    # A body URL context is always strong. A Location reflection is strong ONLY for the
+    # X-Forwarded-* / Forwarded family: those prove the app trusts a proxy header to build
+    # an absolute URL. The raw `Host` vector landing the canary in Location can be a plain
+    # scheme/canonical self-redirect that echoes whatever Host it received — down-ranked to
+    # surface so a benign HTTP→HTTPS redirect isn't reported as confirmed reset poisoning.
+    strong = [
+        h for h in hits
+        if h["reflection"] == "body_url"
+        or (h["reflection"] == "location" and h["vector"] != "Host")
+    ]
     confirmed = bool(strong)
     vectors = sorted({h["vector"] for h in hits})
     return {

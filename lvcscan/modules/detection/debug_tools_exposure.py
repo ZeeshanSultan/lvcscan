@@ -40,19 +40,22 @@ def scan(target_url: str, *, session=None, username=None, password=None, **kwarg
         target_url = normalize_base(target_url)
         
         # Debug tool paths to test
+        # Indicators are SPECIFIC, case-sensitive markers only. Bare lowercase words
+        # ('nova', 'horizon', 'ignition', 'clockwork') matched unrelated content
+        # ('innovation', 'horizontal', a CSS class) and flagged any SPA catch-all 200 as
+        # an exposed panel. Each entry now requires an asset/title string that a real
+        # panel emits and an unrelated page does not.
         debug_tools = [
-            {'path': '/_debugbar', 'tool': 'Debugbar', 'indicators': ['Debugbar', 'phpdebugbar', 'debugbar']},
-            {'path': '/debugbar', 'tool': 'Debugbar', 'indicators': ['Debugbar', 'phpdebugbar', 'debugbar']},
-            {'path': '/telescope', 'tool': 'Telescope', 'indicators': ['Laravel Telescope', 'Telescope', 'telescope']},
-            {'path': '/horizon', 'tool': 'Horizon', 'indicators': ['Laravel Horizon', 'Horizon', 'horizon']},
-            {'path': '/nova', 'tool': 'Nova', 'indicators': ['Nova', 'Laravel Nova', 'nova']},
-            # Salvaged from the (now-removed) scan_detailed so this live scan() keeps full panel
-            # coverage (also closes PROBE_DETECTION_GAPS G5 — these 5 paths were dormant in dead code):
-            {'path': '/clockwork', 'tool': 'Clockwork', 'indicators': ['Clockwork', 'clockwork']},
-            {'path': '/_ignition', 'tool': 'Ignition', 'indicators': ['Ignition', 'ignition', 'Facade\\Ignition']},
-            {'path': '/ignition', 'tool': 'Ignition', 'indicators': ['Ignition', 'ignition', 'Facade\\Ignition']},
-            {'path': '/laravel-logs', 'tool': 'Laravel Logs', 'indicators': ['laravel-logs', 'Laravel Logs']},
-            {'path': '/log-viewer', 'tool': 'Log Viewer', 'indicators': ['Log Viewer', 'Laravel Log Viewer']},
+            {'path': '/_debugbar', 'tool': 'Debugbar', 'indicators': ['phpdebugbar', 'PhpDebugBar']},
+            {'path': '/debugbar', 'tool': 'Debugbar', 'indicators': ['phpdebugbar', 'PhpDebugBar']},
+            {'path': '/telescope', 'tool': 'Telescope', 'indicators': ['Laravel Telescope', 'telescope-app', 'window.Telescope']},
+            {'path': '/horizon', 'tool': 'Horizon', 'indicators': ['Laravel Horizon', 'horizon-app', 'window.Horizon']},
+            {'path': '/nova', 'tool': 'Nova', 'indicators': ['Laravel Nova', 'window.Nova', 'nova-app']},
+            {'path': '/clockwork', 'tool': 'Clockwork', 'indicators': ['clockwork-app', 'Clockwork App', '#clockwork']},
+            {'path': '/_ignition', 'tool': 'Ignition', 'indicators': ['Facade\\Ignition', 'ignition.js', 'execute-solution']},
+            {'path': '/ignition', 'tool': 'Ignition', 'indicators': ['Facade\\Ignition', 'ignition.js', 'execute-solution']},
+            {'path': '/laravel-logs', 'tool': 'Laravel Logs', 'indicators': ['Laravel Logs', 'log-viewer']},
+            {'path': '/log-viewer', 'tool': 'Log Viewer', 'indicators': ['Laravel Log Viewer', 'log-viewer']},
         ]
         
         exposed_tools = []

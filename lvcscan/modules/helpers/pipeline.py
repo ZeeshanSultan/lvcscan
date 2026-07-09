@@ -13,6 +13,7 @@ DETECTION_VERDICTS = {
     "version_applicable",
     "precondition_detected",
     "blocked_by_control",
+    "blocked_by_policy",
     "not_detected",
     "not_applicable",
     "not_exploitable_refusal",
@@ -114,7 +115,20 @@ def detection_verdict(result: Any, *, vuln_class: Optional[str] = None) -> str:
         return "not_detected"
 
     if isinstance(result, list):
-        return "confirmed_vulnerable" if result else "not_detected"
+        # A bare list is SURFACE evidence, not proof (Phase 0.2). It only confirms
+        # when every element is a dict that INDEPENDENTLY classifies as confirmed
+        # (its own verdict/proof_type), so a list of candidates never inflates to a
+        # CVE hit. Empty -> not_detected.
+        if not result:
+            return "not_detected"
+        if all(
+            isinstance(item, dict) and is_confirmed_detection(
+                detection_verdict(item, vuln_class=vuln_class)
+            )
+            for item in result
+        ):
+            return "confirmed_vulnerable"
+        return "surface_present"
 
     if not isinstance(result, dict):
         return "inconclusive"
@@ -313,7 +327,11 @@ def normalize_exploit_result(cve: Optional[str], result: Any) -> Dict[str, Any]:
         "oob_pending": bool(result.get("oob_pending", False)),
         "reattributed_cve": result.get("reattributed_cve"),
         "outcome_tag": result.get("outcome_tag"),
-        "command": result.get("command") or result.get("detail") if isinstance(result.get("command"), str) else result.get("command"),
+        # `command` is a string or None. The old unparenthesized ternary bound as
+        # (command or detail) if isinstance(command, str) else command — so an empty
+        # command surprisingly returned `detail`, and a non-str command passed through
+        # unnormalized. Parenthesize: keep a real string command, else None.
+        "command": (result.get("command") if isinstance(result.get("command"), str) else None),
         "provides": result.get("provides") or [],
         "consumes": result.get("consumes") or [],
     }

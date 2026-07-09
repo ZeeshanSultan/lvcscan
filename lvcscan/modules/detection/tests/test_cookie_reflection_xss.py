@@ -46,3 +46,19 @@ NO_DOM_SINK_JS = (
 def test_no_dom_sink_not_flagged():
     """Cookie value used only in fetch/path concat (no DOM write) — must return []."""
     assert find_cookie_dom_sinks(NO_DOM_SINK_JS) == []
+
+
+# Minified-bundle style: a .html()/.append() sink and a Cookies.get() both present but
+# in DIFFERENT statements with no dataflow between them — proximity must NOT flag.
+MINIFIED_NO_DATAFLOW = (
+    "var t=Cookies.get('csrf_token');header.set('X-CSRF',t);"
+    "$('#list').html(renderTemplate(items));"
+    "el.append(buildRow(data));var m={message:'ok'};"
+)
+
+def test_no_fp_on_minified_bundle_without_dataflow():
+    assert find_cookie_dom_sinks(MINIFIED_NO_DATAFLOW) == []
+
+def test_direct_cookie_call_in_html_arg_flagged():
+    js = "$('#x').html(Cookies.get('note'));"
+    assert "note" in find_cookie_dom_sinks(js)

@@ -160,7 +160,7 @@ def scan(target_url: str, *, session=None, username: Optional[str] = None,
         "is_snipeit": False,
         "candidate": False,
         "authenticated": False,
-        "severity": "critical",
+        "severity": "High",  # single-source: matches CVE_METADATA
         "evidence": [],
         "status": "Snipe-IT CVE-2024-48987 not detected",
         "verdict": "not_detected",

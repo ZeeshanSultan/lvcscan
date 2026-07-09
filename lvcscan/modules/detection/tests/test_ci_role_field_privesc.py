@@ -44,3 +44,16 @@ def test_generic_type_attribute_not_flagged():
 def test_name_type_field_flagged():
     """name='type' form field IS a role-field reference and must match."""
     assert _references_role_field(BOARD_HTML) == "type"
+
+
+# FP: a generic search/filter form with name="type" but NO role-mutation context.
+SEARCH_FORM_HTML = "<form action='/search'><select name='type'><option>news</option></select></form>"
+
+def test_search_form_type_not_flagged():
+    assert _references_role_field(SEARCH_FORM_HTML) is None
+
+def test_login_redirect_sink_not_reachable():
+    # Sink returns 302 -> login (not authenticated). Must NOT be treated as reachable.
+    sess = FakeSession({"/admin/admin/index.html": FakeResp(302, "", {"Location": "/login"}),
+                        "/admin/admin/updateType.html": FakeResp(302, "", {"Location": "/login"})})
+    assert scan("https://t", session=sess) is None

